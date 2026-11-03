@@ -8,6 +8,12 @@
       name="description"
       content="Cut one city's buildings with another municipality's boundary. PLATEAU (Flateau V2) and National Land Numerical Information N03."
     />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+JP:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
+    />
   </head>
   <body>
     <div id="app">
@@ -22,7 +28,7 @@
         </header>
 
         <section id="sec-material">
-          <h2><span class="step">1</span><span data-i18n="step1.title"></span></h2>
+          <h2><span class="step">01</span><span data-i18n="step1.title"></span><small data-i18n="step1.sub"></small></h2>
           <input id="material-filter" type="search" data-i18n-placeholder="material.filter" />
           <select id="material-select" size="6" data-i18n-aria="step1.title"></select>
           <div class="row">
@@ -36,7 +42,7 @@
         </section>
 
         <section id="sec-template">
-          <h2><span class="step">2</span><span data-i18n="step2.title"></span></h2>
+          <h2><span class="step">02</span><span data-i18n="step2.title"></span><small data-i18n="step2.sub"></small></h2>
           <div class="row">
             <label for="pref-select" data-i18n="pref.label"></label>
             <select id="pref-select"></select>
@@ -51,7 +57,7 @@
         </section>
 
         <section id="sec-place">
-          <h2><span class="step">3</span><span data-i18n="step3.title"></span></h2>
+          <h2><span class="step">03</span><span data-i18n="step3.title"></span><small data-i18n="step3.sub"></small></h2>
           <p class="hint" data-i18n="place.hint"></p>
           <div class="row">
             <label for="width-num" data-i18n="place.width"></label>
@@ -71,7 +77,11 @@
         </section>
 
         <section id="sec-cut">
-          <h2><span class="step">4</span><span data-i18n="step4.title"></span></h2>
+          <h2><span class="step">04</span><span data-i18n="step4.title"></span><small data-i18n="step4.sub"></small></h2>
+          <div class="cut-row">
+            <button id="btn-cut" type="button"><svg id="cut-shape" viewBox="0 0 100 100" aria-hidden="true"></svg><span data-i18n="cut.btn"></span></button>
+          </div>
+          <div class="row buttons"><button id="btn-force" type="button" hidden data-i18n="cut.force"></button></div>
           <label class="check"><input id="auto-cut" type="checkbox" checked /> <span data-i18n="cut.auto"></span></label>
           <div class="row">
             <label for="read-mode" data-i18n="cut.read"></label>
@@ -81,16 +91,12 @@
             </select>
           </div>
           <p class="hint" data-i18n="cut.readHint"></p>
-          <div class="row buttons">
-            <button id="btn-cut" type="button" class="primary" data-i18n="cut.btn"></button>
-            <button id="btn-force" type="button" hidden data-i18n="cut.force"></button>
-          </div>
           <div id="job-status" class="status" aria-live="polite"></div>
           <div id="job-stats" class="info small"></div>
         </section>
 
         <section id="sec-view">
-          <h2><span class="step">5</span><span data-i18n="step5.title"></span></h2>
+          <h2><span class="step">05</span><span data-i18n="step5.title"></span><small data-i18n="step5.sub"></small></h2>
           <div class="row">
             <label for="ex-range" data-i18n="view.ex"></label>
             <input id="ex-range" type="range" min="0.5" max="5" step="0.1" value="1" />

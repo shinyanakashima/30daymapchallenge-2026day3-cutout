@@ -146,8 +146,20 @@ const map = new maplibregl.Map({
       },
     },
     layers: [
-      { id: 'bg', type: 'background', paint: { 'background-color': '#f3f1ec' } },
-      { id: 'gsi', type: 'raster', source: 'gsi', paint: { 'raster-opacity': 0.55, 'raster-saturation': -0.6 } },
+      { id: 'bg', type: 'background', paint: { 'background-color': '#08090b' } },
+      // 淡色地図を明暗反転・無彩色にして暗い背景にする
+      {
+        id: 'gsi',
+        type: 'raster',
+        source: 'gsi',
+        paint: {
+          'raster-opacity': 0.42,
+          'raster-saturation': -1,
+          'raster-brightness-min': 1,
+          'raster-brightness-max': 0,
+          'raster-contrast': 0.15,
+        },
+      },
     ],
   },
   center: [141.3545, 43.0618],
@@ -180,17 +192,23 @@ map.on('idle', () => {
 });
 map.on('dataloading', () => mapLoaded && setMapStatus('map.drawing'));
 
-const heightColor: maplibregl.ExpressionSpecification = [
-  'interpolate', ['linear'], ['coalesce', ['get', 'height_m'], 0],
-  0, '#efe3c8', 8, '#e8bf86', 20, '#df8f4a', 45, '#c4521f', 90, '#8a2a14', 160, '#4a120a',
-];
+// 建物は生地の色（高いほど焼き色が濃い）。刃（型の輪郭）だけが光る
+const C = {
+  nh: '#5c636c',
+  ramp: [0, '#f4e2bd', 10, '#ecc282', 25, '#e19a4f', 50, '#c46c2c', 100, '#8e4318', 160, '#5a2a10'] as (number | string)[],
+  whole: '#e8cfa0',
+  cut: '#ffa94d',
+  measured: '#8db8e3',
+  cal: '#ecc282',
+  cand: '#2b323b',
+  blade: '#ffd08a',
+  plinth: '#141619',
+};
+const heightColor = ['interpolate', ['linear'], ['coalesce', ['get', 'height_m'], 0], ...C.ramp] as unknown as maplibregl.ExpressionSpecification;
 const colorModes: Record<string, maplibregl.ExpressionSpecification> = {
-  height: ['case', ['==', ['get', 'height_m'], null], '#9aa0a6', heightColor],
-  cut: ['case', ['==', ['get', 'height_m'], null], '#9aa0a6', ['case', ['get', 'cut'], '#c4521f', '#d9c6a3']],
-  src: [
-    'match', ['coalesce', ['get', 'height_src'], 'none'],
-    'measured_height', '#3b6ea8', 'cal_height_m', '#d9a03f', '#9aa0a6',
-  ],
+  height: ['case', ['==', ['get', 'height_m'], null], C.nh, heightColor],
+  cut: ['case', ['==', ['get', 'height_m'], null], C.nh, ['case', ['get', 'cut'], C.cut, C.whole]],
+  src: ['match', ['coalesce', ['get', 'height_src'], 'none'], 'measured_height', C.measured, 'cal_height_m', C.cal, C.nh],
 };
 
 map.on('load', () => {
@@ -203,15 +221,15 @@ map.on('load', () => {
   map.addSource('preview', { type: 'geojson', data: empty });
   map.addLayer({
     id: 'coverage-line', type: 'line', source: 'coverage',
-    paint: { 'line-color': '#335', 'line-width': 1.2, 'line-dasharray': [4, 3], 'line-opacity': 0.7 },
+    paint: { 'line-color': '#4b5563', 'line-width': 1.2, 'line-dasharray': [4, 3], 'line-opacity': 0.8 },
   });
   map.addLayer({
     id: 'cand-fill', type: 'fill', source: 'cand',
-    paint: { 'fill-color': '#7d8590', 'fill-opacity': 0.28 },
+    paint: { 'fill-color': C.cand, 'fill-opacity': 0.55 },
   });
   map.addLayer({
     id: 'plinth', type: 'fill-extrusion', source: 'plinth',
-    paint: { 'fill-extrusion-color': '#e9e4d8', 'fill-extrusion-opacity': 0.85, 'fill-extrusion-base': 0, 'fill-extrusion-height': PLINTH_M },
+    paint: { 'fill-extrusion-color': C.plinth, 'fill-extrusion-opacity': 0.9, 'fill-extrusion-base': 0, 'fill-extrusion-height': PLINTH_M },
   });
   map.addLayer({
     id: 'res-3d', type: 'fill-extrusion', source: 'res',
@@ -219,11 +237,23 @@ map.on('load', () => {
   });
   map.addLayer({
     id: 'preview-fill', type: 'fill', source: 'preview',
-    paint: { 'fill-color': '#d9661f', 'fill-opacity': 0.08 },
+    paint: { 'fill-color': '#ffb04d', 'fill-opacity': 0.03 },
+  });
+  // 光る刃：ぼかした太線 2 本の上に細い芯線
+  map.addLayer({
+    id: 'preview-glow-2', type: 'line', source: 'preview',
+    layout: { 'line-join': 'round' },
+    paint: { 'line-color': '#ff8a1e', 'line-width': 16, 'line-blur': 14, 'line-opacity': 0.45 },
+  });
+  map.addLayer({
+    id: 'preview-glow-1', type: 'line', source: 'preview',
+    layout: { 'line-join': 'round' },
+    paint: { 'line-color': '#ffb052', 'line-width': 6, 'line-blur': 4, 'line-opacity': 0.8 },
   });
   map.addLayer({
     id: 'preview-line', type: 'line', source: 'preview',
-    paint: { 'line-color': '#d9661f', 'line-width': 2, 'line-dasharray': [2, 1.5] },
+    layout: { 'line-join': 'round' },
+    paint: { 'line-color': C.blade, 'line-width': 1.6 },
   });
   updateViewPaint();
   setupDrag();
@@ -598,6 +628,7 @@ function drawThumb(g: GeoJSON.Polygon | GeoJSON.MultiPolygon) {
     parts.push(`M${pts.join('L')}Z`);
   }
   $('template-thumb').innerHTML = `<path fill-rule="evenodd" d="${parts.join('')}"/>`;
+  $('cut-shape').innerHTML = `<path fill-rule="evenodd" d="${parts.join('')}"/>`;
 }
 
 // ---- 配置 ----
@@ -832,6 +863,7 @@ async function runCutout(force: boolean) {
     };
     if (mapLoaded) {
       src('res')?.setData(state.result.fc);
+      stampAnimation();
       src('plinth')?.setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: placedForResult } });
     }
     ($('btn-export') as HTMLButtonElement).disabled = features.length === 0;
@@ -891,18 +923,48 @@ function updateViewPaint() {
   const showPlinth = ($('show-plinth') as HTMLInputElement).checked;
   const base = lift + (showPlinth ? PLINTH_M : 0);
   map.setPaintProperty('res-3d', 'fill-extrusion-base', base);
-  map.setPaintProperty('res-3d', 'fill-extrusion-height', [
-    'case', ['==', ['get', 'height_m'], null], base + 0.3, ['+', base, ['*', ['to-number', ['get', 'height_m']], ex]],
-  ]);
+  setResultHeight(base, ex * riseFactor);
   map.setPaintProperty('plinth', 'fill-extrusion-base', lift);
   map.setPaintProperty('plinth', 'fill-extrusion-height', lift + PLINTH_M);
   map.setPaintProperty('res-3d', 'fill-extrusion-color', colorModes[($('color-mode') as HTMLSelectElement).value]);
   map.setLayoutProperty('plinth', 'visibility', showPlinth ? 'visible' : 'none');
   map.setLayoutProperty('cand-fill', 'visibility', ($('show-cand') as HTMLInputElement).checked ? 'visible' : 'none');
   const pv = ($('show-preview') as HTMLInputElement).checked ? 'visible' : 'none';
-  map.setLayoutProperty('preview-fill', 'visibility', pv);
-  map.setLayoutProperty('preview-line', 'visibility', pv);
+  for (const id of ['preview-fill', 'preview-glow-2', 'preview-glow-1', 'preview-line']) map.setLayoutProperty(id, 'visibility', pv);
   renderLegend();
+}
+
+function setResultHeight(base: number, ex: number) {
+  map.setPaintProperty('res-3d', 'fill-extrusion-height', [
+    'case', ['==', ['get', 'height_m'], null], base + 0.3, ['+', base, ['*', ['to-number', ['get', 'height_m']], ex]],
+  ]);
+}
+
+/** 型抜きの演出：刃が一瞬強く光り、建物が平らな状態から立ち上がる（動きを減らす設定では省略） */
+let riseFactor = 1;
+let riseRaf = 0;
+function stampAnimation() {
+  if (!mapLoaded || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  cancelAnimationFrame(riseRaf);
+  const btn = $('btn-cut');
+  btn.classList.add('pressed');
+  setTimeout(() => btn.classList.remove('pressed'), 140);
+  const start = performance.now();
+  const DUR = 750;
+  const step = () => {
+    const k = Math.min(1, (performance.now() - start) / DUR);
+    const f = 1 - Math.pow(1 - k, 3);
+    riseFactor = f;
+    const { ex, lift } = viewParams();
+    const base = lift + (($('show-plinth') as HTMLInputElement).checked ? PLINTH_M : 0);
+    setResultHeight(base, ex * f);
+    map.setPaintProperty('preview-glow-1', 'line-width', 6 + 10 * (1 - f));
+    map.setPaintProperty('preview-glow-2', 'line-opacity', 0.45 + 0.45 * (1 - f));
+    if (k < 1) riseRaf = requestAnimationFrame(step);
+    else riseFactor = 1;
+  };
+  riseFactor = 0;
+  step();
 }
 
 function renderLegend() {
@@ -910,14 +972,14 @@ function renderLegend() {
   const sw = (c: string, t: string) => `<span class="item"><span class="sw" style="background:${c}"></span>${t}</span>`;
   const items =
     mode === 'height'
-      ? [sw('#efe3c8', '0'), sw('#e8bf86', '8'), sw('#df8f4a', '20'), sw('#c4521f', '45'), sw('#8a2a14', '90'), sw('#4a120a', '160 m'), sw('#9aa0a6', t('lg.nh'))]
+      ? [0, 2, 4, 6, 8, 10].map((i) => sw(String(C.ramp[i + 1]), i === 10 ? `${C.ramp[i]} m` : String(C.ramp[i]))).concat(sw(C.nh, t('lg.nh')))
       : mode === 'cut'
-        ? [sw('#d9c6a3', t('lg.whole')), sw('#c4521f', t('lg.cut')), sw('#9aa0a6', t('lg.nh'))]
-        : [sw('#3b6ea8', 'measured_height'), sw('#d9a03f', 'cal_height_m'), sw('#9aa0a6', t('lg.none0'))];
+        ? [sw(C.whole, t('lg.whole')), sw(C.cut, t('lg.cut')), sw(C.nh, t('lg.nh'))]
+        : [sw(C.measured, 'measured_height'), sw(C.cal, 'cal_height_m'), sw(C.nh, t('lg.none0'))];
   const { ex, lift } = viewParams();
   $('legend').innerHTML =
     items.join('') +
-    `<br>${sw('rgba(125,133,144,0.28)', t('lg.cand'))}${sw('rgba(217,102,31,0.25)', t('lg.preview'))}${sw('#e9e4d8', t('lg.plinth'))}` +
+    `<br>${sw(C.cand, t('lg.cand'))}${sw(C.blade, t('lg.preview'))}${sw(C.plinth, t('lg.plinth'))}` +
     `<br>${t('lg.note', { x: ex.toFixed(1), l: lift })}`;
 }
 
