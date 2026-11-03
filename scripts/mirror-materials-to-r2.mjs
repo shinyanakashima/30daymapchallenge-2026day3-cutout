@@ -4,17 +4,17 @@
 // - <prefix> の外には書き込まない。削除はしない
 // - 結果を public/catalog/mirror.json に記録する（アプリはこれを見て R2 の複製から読む）
 //
-// 必要な環境変数（プロジェクト共通の名前。秘密ではない）:
-//   R2_GEO_OPENDATA_ENDPOINT, R2_GEO_OPENDATA_BUCKET, R2_GEO_OPENDATA_PUBLIC_BASE_URL
-// 認証：キーはスクリプトでは扱わない。Claude のクラウド環境のネットワークシークレット（AWS SigV4）が
-//   通信の途中で署名する（許可ホスト＝R2 エンドポイント、パスプレフィックス＝/<バケット>/<フォルダ>/）。
-//   そのため要求はパス形式（https://<endpoint>/<bucket>/<key>）で送る。
+// 必要な環境変数（プロジェクト共通の名前）:
+//   R2_GEO_OPENDATA_ENDPOINT, R2_GEO_OPENDATA_BUCKET, R2_GEO_OPENDATA_PUBLIC_BASE_URL,
+//   R2_GEO_OPENDATA_ACCESS_KEY_ID, R2_GEO_OPENDATA_SECRET_ACCESS_KEY（R2 API トークン。geo-opendata の Object Read & Write のみ）
+// 要求はパス形式（https://<endpoint>/<bucket>/<key>）で送る。
 //
 // 使い方:
 //   node scripts/mirror-materials-to-r2.mjs --prefix <フォルダ名> sapporo-shi-01100 chiyoda-ku-13101
 //   node scripts/mirror-materials-to-r2.mjs --prefix <フォルダ名> --all
 //   --dry-run  取得・照合だけ行い、アップロードしない
 //   --force    R2 に同じものがあっても上げ直す
+import { S3Client, HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, stat, rm } from 'node:fs/promises';
@@ -57,33 +57,40 @@ const endpoint = env('R2_GEO_OPENDATA_ENDPOINT').replace(/\/$/, '');
 const bucket = env('R2_GEO_OPENDATA_BUCKET');
 const publicBase = env('R2_GEO_OPENDATA_PUBLIC_BASE_URL').replace(/\/?$/, '/');
 
-/** パス形式の URL。キーの各要素をエンコードする */
-const objectUrl = (key) => `${endpoint}/${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
+const s3 = upload
+  ? new S3Client({
+      region: 'auto',
+      endpoint,
+      forcePathStyle: true,
+      credentials: {
+        accessKeyId: env('R2_GEO_OPENDATA_ACCESS_KEY_ID'),
+        secretAccessKey: env('R2_GEO_OPENDATA_SECRET_ACCESS_KEY'),
+      },
+    })
+  : null;
 
 async function headObject(key) {
-  const r = await fetch(objectUrl(key), { method: 'HEAD' });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`R2 HEAD 失敗 HTTP ${r.status}（ネットワークシークレットの許可ホスト・パスを確認）`);
-  return {
-    size: Number(r.headers.get('content-length')),
-    sourceEtag: r.headers.get('x-amz-meta-source-etag'),
-    sha256: r.headers.get('x-amz-meta-sha256'),
-  };
+  try {
+    const h = await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    return { size: h.ContentLength, sourceEtag: h.Metadata?.['source-etag'] ?? null, sha256: h.Metadata?.sha256 ?? null };
+  } catch (e) {
+    if (e?.$metadata?.httpStatusCode === 404) return null;
+    throw new Error(`R2 HEAD 失敗 HTTP ${e?.$metadata?.httpStatusCode ?? '?'}: ${e.message}`);
+  }
 }
 
-async function putObject(key, body, meta) {
-  const r = await fetch(objectUrl(key), {
-    method: 'PUT',
-    body,
-    headers: {
-      'content-type': 'application/vnd.apache.parquet',
-      'cache-control': 'public, max-age=86400',
-      'x-amz-meta-source-url': meta.sourceUrl,
-      'x-amz-meta-source-etag': meta.sourceEtag ?? '',
-      'x-amz-meta-sha256': meta.sha256,
-    },
-  });
-  if (!r.ok) throw new Error(`R2 PUT 失敗 HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`);
+async function putObject(key, file, size, meta) {
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: createReadStream(file),
+      ContentLength: size,
+      ContentType: 'application/vnd.apache.parquet',
+      CacheControl: 'public, max-age=86400',
+      Metadata: { 'source-url': meta.sourceUrl, 'source-etag': meta.sourceEtag ?? '', sha256: meta.sha256 },
+    }),
+  );
 }
 
 // ---- 対象 ----
@@ -151,7 +158,7 @@ async function mirrorOne(m) {
   }
   const hash = await sha256(tmp);
   if (upload) {
-    await putObject(key, await readFile(tmp), { sourceUrl: m.href, sourceEtag, sha256: hash });
+    await putObject(key, tmp, size, { sourceUrl: m.href, sourceEtag, sha256: hash });
     const h = await headObject(key);
     if (!h || h.size !== size) throw new Error(`${m.itemId}: アップロード後の容量が一致しません`);
     mirror.items[m.itemId] = entry(m, key, hash, sourceEtag);

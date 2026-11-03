@@ -1,0 +1,27 @@
+{
+ "items": {
+  "chiyoda-ku-13101": {
+   "href": "https://pub-e9203620dc2948bf91ccae779a96cab7.r2.dev/mlit-plateau/Flateau/flateau-2-0/flateau-v2-by-city/chiyoda-ku-13101/chiyoda-ku-13101_building_lod0.parquet",
+   "key": "mlit-plateau/Flateau/flateau-2-0/flateau-v2-by-city/chiyoda-ku-13101/chiyoda-ku-13101_building_lod0.parquet",
+   "bytes": 5991529,
+   "sha256": "ddbff4ec9cd29f40d1c3dc988968af33c716c5f5f6369b9971201ac5015c8376",
+   "sourceHref": "https://data.source.coop/pacificspatial/flateau-2-0/flateau-v2-by-city/chiyoda-ku-13101/chiyoda-ku-13101_building_lod0.parquet",
+   "sourceEtag": "\"6e00c418e0ff18cb5ce54bc634dac970-1\"",
+   "uploadedAt": "2026-11-03T12:18:17.137Z"
+  },
+  "sapporo-shi-01100": {
+   "href": "https://pub-e9203620dc2948bf91ccae779a96cab7.r2.dev/mlit-plateau/Flateau/flateau-2-0/flateau-v2-by-city/sapporo-shi-01100/sapporo-shi-01100_building_lod0.parquet",
+   "key": "mlit-plateau/Flateau/flateau-2-0/flateau-v2-by-city/sapporo-shi-01100/sapporo-shi-01100_building_lod0.parquet",
+   "bytes": 92415645,
+   "sha256": "8776ab678cff7d4723ac1ed919790543e158ee3d8dbd4685d994482e95d3f34d",
+   "sourceHref": "https://data.source.coop/pacificspatial/flateau-2-0/flateau-v2-by-city/sapporo-shi-01100/sapporo-shi-01100_building_lod0.parquet",
+   "sourceEtag": "\"ecca19002bd8efa02bd7ceeaabd9bdad-12\"",
+   "uploadedAt": "2026-11-03T12:18:26.112Z"
+  }
+ },
+ "baseUrl": "https://pub-e9203620dc2948bf91ccae779a96cab7.r2.dev/mlit-plateau/Flateau/",
+ "bucket": "geo-opendata",
+ "prefix": "mlit-plateau/Flateau/",
+ "source": "Flateau V2（https://source.coop/pacificspatial/flateau-2-0）を変換せずに複製",
+ "generatedAt": "2026-11-03T12:18:26.121Z"
+}

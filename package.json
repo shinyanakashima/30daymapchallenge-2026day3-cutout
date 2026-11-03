@@ -20,6 +20,7 @@
     "proj4": "2.22.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.1161.0",
     "@duckdb/node-api": "1.5.6-r.2",
     "@types/geojson": "^7946.0.16",
     "@types/proj4": "^2.5.6",
