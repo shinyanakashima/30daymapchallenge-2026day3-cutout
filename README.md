@@ -15,7 +15,7 @@ npm run build     # 型チェック + dist/ へ出力
 npm run preview   # http://localhost:4173/（ビルド結果の確認）
 ```
 
-- 実行時に必要な外部アクセス：`data.source.coop`（素材の Parquet）、`extensions.duckdb.org`（DuckDB spatial 拡張）、`cyberjapandata.gsi.go.jp`（背景地図）。APIキー・個人情報は不要。
+- 実行時に必要な外部アクセス：`pub-e9203620dc2948bf91ccae779a96cab7.r2.dev`（素材の R2 複製）、`data.source.coop`（公開元。複製が無い素材と切替時）、`extensions.duckdb.org`（DuckDB spatial 拡張）、`cyberjapandata.gsi.go.jp`（背景地図）。APIキー・個人情報は不要。
 - `vite.config.ts` は `base: './'` のため、GitHub Pages 等のサブパスにそのまま置けます（配信先は未確定）。
 - `dist/` には DuckDB-Wasm の wasm（約36MB/41MB）が含まれます。1ファイル100MB未満です。
 
@@ -40,7 +40,9 @@ React は使っていません（Vite + TypeScript + MapLibre）。Python は不
 - 生データ：`data/raw/n03/*.zip`（`.gitignore` 対象。スクリプトが再取得）
 - 配布用データ：`public/catalog/`、`public/templates/`（リポジトリに含める。小さなカタログ＋自治体ごとの型）
 - キャッシュ：ブラウザのメモリ上のみ（DuckDB-Wasm 内の `cand` テーブル、全体取得時のファイルバッファ）。ディスクには書かない
-- 素材の建物ファイル（Flateau V2 の Parquet）はリポジトリに含めず、実行時に取得元から読む
+- 素材の建物ファイル（Flateau V2 の Parquet）はリポジトリに含めず、実行時に R2 の複製（無ければ公開元）から読む
+- 秘密情報（R2 のキー）はリポジトリに含めない。環境変数で渡す
+
 
 ## データの取得・再生成
 
@@ -54,6 +56,34 @@ npm run data:materials
 `building_lod0` asset を持つものだけを素材にします（重心・属性だけのファイルは含めない）。
 表示名・年度・件数・容量・範囲は STAC のメタデータ（`plateau:area_ja`、`plateau:fiscal_year`、`table:row_count`、`file:size`、`bbox`）から取り、ファイル名から推測しません。
 素材 ID は `<STAC Item ID>/building_lod0` で、同じ都市に複数年度が出ても Item ID で区別されます（2026-11-03 取得時点では同一 JIS コードの重複はなし）。
+
+### 素材の R2 複製（Cloudflare R2 `geo-opendata`）
+
+公開元 source.coop は1要求ごとの応答が遅い（実測 約0.8秒、配信キャッシュなし）ため、
+building_lod0 を**変換せずにそのまま** Cloudflare R2 に複製し、アプリは既定でそちらから読みます。
+
+```bash
+npm run data:mirror -- --prefix mlit-plateau/Flateau --all          # 全件（約4.4GB）
+npm run data:mirror -- --prefix mlit-plateau/Flateau sapporo-shi-01100   # 指定した Item だけ
+npm run data:mirror -- --prefix mlit-plateau/Flateau --all --dry-run     # 取得・照合のみ
+```
+
+- 置き場所：アカウント Zukosha IT Dev のバケット `geo-opendata`、フォルダ `mlit-plateau/Flateau/` の配下に、公開元と同じ相対パス（`flateau-2-0/flateau-v2-by-city/<Item ID>/<ファイル名>`）で置く。
+- 処理：元ファイルを取得 → 容量を STAC の `file:size` と照合 → SHA-256 を計算 → 同じバイト列をアップロード → 容量を再確認。元の ETag と SHA-256 をオブジェクトのメタデータにも残す。
+  R2 に同じもの（容量と元 ETag が一致）があれば飛ばすので、途中で止まっても再実行で続きから進む。フォルダの外には書かず、削除もしない。
+- 結果：`public/catalog/mirror.json`（公開URL・容量・SHA-256・元の URL と ETag）。アプリはこれを読み、複製がある素材は R2 から、無い素材は公開元から読む。画面の「取得元」で切り替え可能。
+- 公開URL：`https://pub-e9203620dc2948bf91ccae779a96cab7.r2.dev/mlit-plateau/Flateau/...`（CORS は GET/HEAD・`range` ヘッダーを許可済み、Range 要求に対応）。
+- 必要な環境変数（プロジェクト共通の名前）：
+
+  | 名前 | 内容 |
+  | --- | --- |
+  | `R2_GEO_OPENDATA_ENDPOINT` | `https://<アカウントID>.r2.cloudflarestorage.com` |
+  | `R2_GEO_OPENDATA_BUCKET` | `geo-opendata` |
+  | `R2_GEO_OPENDATA_PUBLIC_BASE_URL` | バケットの公開URL |
+  | `R2_GEO_OPENDATA_ACCESS_KEY_ID` | R2 API トークン（`geo-opendata` の Object Read & Write のみ） |
+  | `R2_GEO_OPENDATA_SECRET_ACCESS_KEY` | 同上 |
+
+  キーは環境変数で渡し、リポジトリやチャットには書かない。Claude のクラウド環境の「ネットワークシークレット（AWS SigV4）」は `*.amazonaws.com` 向けのため R2 では使えない（2026-11-03 確認）。
 
 ### 型（国土数値情報 N03 2026年）
 
@@ -153,12 +183,20 @@ HAVING g IS NOT NULL AND NOT ST_IsEmpty(g) AND ST_Area(g) > 0;   -- 境界に接
 | 素材を東京都 千代田区（2025年度）に変更 | 候補 6,396 → 286 | 15.1秒 | 6.5MB（ファイル 6.0MB） |
 | 札幌で幅20,000m、上限超え → 「このまま実行」 | 候補 557,499 → 299,163 | 切断4.7秒・出力3.4秒 | — |
 
+取得元による比較（札幌 × 函館市、幅4,000m、同じ配置。2026-11-03）：
+
+| 取得元・読込方式 | 型抜きの合計 | 素材の取得 |
+| --- | --- | --- |
+| 公開元 source.coop・Range | 36.0秒 | 88.0MB／31要求 |
+| R2 の複製・Range | 13.8秒 | 90.8MB／28要求 |
+| R2 の複製・全体取得（既定） | 5.7秒（うち取得2.9秒） | 92.4MB／1要求 |
+
 読み取れること：
 
 - 素材を選んだだけでは建物ファイル本体は取得しません（ヘッダ26KB）。
 - Flateau V2 の都市別ファイルは行グループが少なく（札幌は6個で各約10.8万棟）、各行グループが市内の広い範囲にまたがっています。
   そのため Range 読込でも取得量はファイル全体とほぼ同じになり、この環境では小さな要求を順に送る分だけ全体取得より遅くなりました。
-  部分読込による高速化は、少なくとも札幌・千代田区のファイルでは確認できていません。画面で「ファイル全体を1回取得して保持」に切り替えられます。
+  部分読込による高速化は、少なくとも札幌・千代田区のファイルでは確認できていません。そのため既定を「R2 の複製から全体を1回取得」にしています（画面で切替可能）。
 - 型の切断自体は数万件で1秒前後。型を小片に分けない場合（DuckDB-Wasm で ST_Subdivide なし）は同条件で56秒でした。
 - 2万パーツ程度は参考値で、保証上限ではありません。8万件を超える候補は確認を求め、件数を勝手に減らしません。
 
@@ -180,7 +218,7 @@ HAVING g IS NOT NULL AND NOT ST_IsEmpty(g) AND ST_Area(g) > 0;   -- 境界に接
 ## 制約・未実装
 
 - 型を整備済みなのは北海道・東京都・大阪府・沖縄県のみ（他は未整備表示）。追加は `npm run data:templates -- <pp>`。全47都道府県では約数百MBになる見込みで、配布方法は未検討。
-- 素材の Range 読込は上記のとおり効果が小さい。Flateau V2 の KD-tree 分割コレクションの利用は未実装（別素材が混ざらないよう都市コードで絞る設計が必要）。
+- 素材の Range 読込は上記のとおり効果が小さい。全体取得は素材ファイルの容量（最大 横浜市 134MB）をブラウザのメモリに保持する。Flateau V2 の KD-tree 分割コレクションの利用は未実装（別素材が混ざらないよう都市コードで絞る設計が必要）。
 - 複数素材の合成、複数自治体の同時型抜き、都道府県全体のパズルは対象外（後続拡張）。
 - 旧試作（184区域方式）の `data/buildings.geojson`、`data/cutters.geojson`、`day3-map-viewer.html`、`day3_work.duckdb` はこのリポジトリに含まれていません。再切り抜きにはそれらではなく、型の原本（N03）と切断前の建物（Flateau V2）を使います。
 - JGD2011 と WGS84 は同一視して表示しています（差は数cm程度）。

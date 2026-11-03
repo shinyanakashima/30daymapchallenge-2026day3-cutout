@@ -70,11 +70,11 @@
           <div class="row">
             <label for="read-mode">素材の読込</label>
             <select id="read-mode">
-              <option value="range" selected>必要な部分だけ取得（HTTP Range）</option>
-              <option value="full">ファイル全体を1回取得して保持</option>
+              <option value="full" selected>ファイル全体を1回取得して保持</option>
+              <option value="range">必要な部分だけ取得（HTTP Range）</option>
             </select>
           </div>
-          <p class="hint">Range は選んだ範囲に関係する列・行グループだけを読みます。ファイルの並び方によっては全体取得と転送量が大きく変わらない場合があります（下の実測値を参照）。</p>
+          <p class="hint">既定は「全体を1回取得」です。Flateau V2 の都市別ファイルは行グループが大きく、部分取得でもほぼ全体を読むため、1回で取る方が速く済みます（実測値は下に表示）。</p>
           <div class="row buttons">
             <button id="btn-cut" type="button" class="primary">型抜き</button>
             <button id="btn-force" type="button" hidden>このまま実行</button>
