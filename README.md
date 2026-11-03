@@ -16,7 +16,7 @@ npm run preview   # http://localhost:4173/（ビルド結果の確認）
 ```
 
 - 実行時に必要な外部アクセス：`pub-e9203620dc2948bf91ccae779a96cab7.r2.dev`（素材の R2 複製）、`data.source.coop`（公開元。複製が無い素材と切替時）、`extensions.duckdb.org`（DuckDB spatial 拡張）、`cyberjapandata.gsi.go.jp`（背景地図）。APIキー・個人情報は不要。
-- `vite.config.ts` は `base: './'` のため、GitHub Pages 等のサブパスにそのまま置けます（配信先は未確定）。
+- 公開：`main` へのプッシュで GitHub Actions（`.github/workflows/pages.yml`）がビルドし、GitHub Pages に公開します（リポジトリ設定の Pages → Source を「GitHub Actions」にしておく）。`vite.config.ts` は `base: './'` のため、サブパスでもそのまま動きます。
 - `dist/` には DuckDB-Wasm の wasm（約36MB/41MB）が含まれます。1ファイル100MB未満です。
 
 ## 構成
