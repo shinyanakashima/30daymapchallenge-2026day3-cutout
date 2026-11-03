@@ -1,0 +1,287 @@
+{
+ "source": "国土数値情報 N03 N03-20260101",
+ "prefectures": [
+  {
+   "code": "01",
+   "name": "北海道",
+   "ready": true,
+   "units": 195
+  },
+  {
+   "code": "02",
+   "name": "青森県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "03",
+   "name": "岩手県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "04",
+   "name": "宮城県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "05",
+   "name": "秋田県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "06",
+   "name": "山形県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "07",
+   "name": "福島県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "08",
+   "name": "茨城県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "09",
+   "name": "栃木県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "10",
+   "name": "群馬県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "11",
+   "name": "埼玉県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "12",
+   "name": "千葉県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "13",
+   "name": "東京都",
+   "ready": true,
+   "units": 63
+  },
+  {
+   "code": "14",
+   "name": "神奈川県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "15",
+   "name": "新潟県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "16",
+   "name": "富山県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "17",
+   "name": "石川県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "18",
+   "name": "福井県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "19",
+   "name": "山梨県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "20",
+   "name": "長野県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "21",
+   "name": "岐阜県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "22",
+   "name": "静岡県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "23",
+   "name": "愛知県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "24",
+   "name": "三重県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "25",
+   "name": "滋賀県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "26",
+   "name": "京都府",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "27",
+   "name": "大阪府",
+   "ready": true,
+   "units": 74
+  },
+  {
+   "code": "28",
+   "name": "兵庫県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "29",
+   "name": "奈良県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "30",
+   "name": "和歌山県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "31",
+   "name": "鳥取県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "32",
+   "name": "島根県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "33",
+   "name": "岡山県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "34",
+   "name": "広島県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "35",
+   "name": "山口県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "36",
+   "name": "徳島県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "37",
+   "name": "香川県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "38",
+   "name": "愛媛県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "39",
+   "name": "高知県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "40",
+   "name": "福岡県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "41",
+   "name": "佐賀県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "42",
+   "name": "長崎県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "43",
+   "name": "熊本県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "44",
+   "name": "大分県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "45",
+   "name": "宮崎県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "46",
+   "name": "鹿児島県",
+   "ready": false,
+   "units": 0
+  },
+  {
+   "code": "47",
+   "name": "沖縄県",
+   "ready": true,
+   "units": 42
+  }
+ ]
+}

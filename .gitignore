@@ -1,0 +1,8 @@
+node_modules/
+dist/
+# 生データ（再取得可能。scripts/ 参照）
+data/raw/
+data/cache/
+*.duckdb
+*.duckdb.wal
+.DS_Store
