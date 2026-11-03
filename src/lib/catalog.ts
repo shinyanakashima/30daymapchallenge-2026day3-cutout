@@ -64,7 +64,7 @@ const base = import.meta.env.BASE_URL;
 
 async function getJson<T>(path: string): Promise<T> {
   const r = await fetch(`${base}${path}`);
-  if (!r.ok) throw new Error(`${path} を取得できません（HTTP ${r.status}）`);
+  if (!r.ok) throw new Error(`Cannot fetch ${path} (HTTP ${r.status})`);
   return (await r.json()) as T;
 }
 
@@ -74,14 +74,6 @@ export const loadPrefectures = () =>
 export const loadTemplateIndex = (pp: string) => getJson<TemplateIndex>(`templates/${pp}/index.json`);
 export const loadTemplateFeature = (pp: string, code: string) =>
   getJson<GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>>(`templates/${pp}/${code}.geojson`);
-
-export function materialLabel(m: Material) {
-  const area = m.areaJa ? m.areaJa.replace('_', ' ') : m.title;
-  return `${area}（${m.fiscalYear ?? '年度不明'}年度）`;
-}
-export function materialPrefecture(m: Material) {
-  return m.areaJa?.split('_')[0] ?? 'その他';
-}
 
 /** R2 に変換せずに複製した素材の一覧（scripts/mirror-materials-to-r2.mjs が作成） */
 export interface MirrorEntry {

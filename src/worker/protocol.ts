@@ -67,10 +67,16 @@ export type Stage =
   | 'export'
   | 'done';
 
+/** 画面側で翻訳する文言。k は i18n のキー（w. / n. / e. 接頭辞）、p は差し込む値 */
+export interface Msg {
+  k: string;
+  p?: Record<string, string | number>;
+}
+
 export interface StageTiming {
   stage: Stage;
   ms: number;
-  note?: string;
+  note?: Msg;
 }
 
 /** DuckDB-Wasm が素材の取得に使った HTTP 要求の実測（素材ホストへの要求のみ） */
@@ -101,8 +107,8 @@ export interface CutoutStats {
 }
 
 export type Res =
-  | { type: 'progress'; reqId: number; jobId?: number; stage: Stage; message: string }
-  | { type: 'error'; reqId: number; jobId?: number; stage: Stage; message: string }
+  | { type: 'progress'; reqId: number; jobId?: number; stage: Stage; msg: Msg }
+  | { type: 'error'; reqId: number; jobId?: number; stage: Stage; msg: Msg }
   | { type: 'ready'; reqId: number; engineVersion: string; spatialVersion: string; ms: number }
   | {
       type: 'materialReady';

@@ -1,125 +1,126 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>まちの型抜き — 30DayMapChallenge 2026 Day 3 Polygons</title>
-    <meta name="description" content="自治体の行政界を型にして、別の街の建物を切り抜く。PLATEAU（Flateau V2）と国土数値情報N03を使用。" />
+    <title>City Cutout — #30DayMapChallenge 2026 Day 3 Polygons</title>
+    <meta
+      name="description"
+      content="Cut one city's buildings with another municipality's boundary. PLATEAU (Flateau V2) and National Land Numerical Information N03."
+    />
   </head>
   <body>
     <div id="app">
       <aside id="panel">
         <header class="title">
-          <h1>まちの型抜き</h1>
-          <p class="sub">30DayMapChallenge 2026 / Day 3 · Polygons</p>
-          <p class="lead">選んだ街の建物を、別の自治体の行政界で型抜きします。型の名前は形の出どころで、建物は素材の街のものです。</p>
+          <div class="title-row">
+            <h1 data-i18n="app.title">City Cutout</h1>
+            <button id="btn-lang" type="button" class="lang" data-i18n="lang.switch">日本語</button>
+          </div>
+          <p class="sub" data-i18n="app.sub">#30DayMapChallenge 2026 · Day 3 — Polygons</p>
+          <p class="lead" data-i18n="app.lead"></p>
         </header>
 
         <section id="sec-material">
-          <h2><span class="step">1</span>素材を選ぶ（建物ファイル）</h2>
-          <input id="material-filter" type="search" placeholder="都市名・都道府県・年度で絞り込み" />
-          <select id="material-select" size="6" aria-label="素材ファイル"></select>
+          <h2><span class="step">1</span><span data-i18n="step1.title"></span></h2>
+          <input id="material-filter" type="search" data-i18n-placeholder="material.filter" />
+          <select id="material-select" size="6" data-i18n-aria="step1.title"></select>
           <div class="row">
-            <label for="source-select">取得元</label>
+            <label for="source-select" data-i18n="source.label"></label>
             <select id="source-select">
-              <option value="r2" disabled>R2 の複製</option>
-              <option value="origin" selected>公開元（source.coop）</option>
+              <option value="r2" disabled data-i18n="source.r2"></option>
+              <option value="origin" selected data-i18n="source.origin"></option>
             </select>
           </div>
           <dl id="material-info" class="info"></dl>
         </section>
 
         <section id="sec-template">
-          <h2><span class="step">2</span>型を選ぶ（都道府県 → 自治体）</h2>
+          <h2><span class="step">2</span><span data-i18n="step2.title"></span></h2>
           <div class="row">
-            <label for="pref-select">型の都道府県</label>
+            <label for="pref-select" data-i18n="pref.label"></label>
             <select id="pref-select"></select>
           </div>
           <div class="row">
-            <label for="unit-filter">型の自治体</label>
-            <input id="unit-filter" type="search" placeholder="自治体名で絞り込み" />
+            <label for="unit-filter" data-i18n="unit.label"></label>
+            <input id="unit-filter" type="search" data-i18n-placeholder="unit.filter" />
           </div>
-          <select id="unit-select" size="6" aria-label="型の自治体"></select>
+          <select id="unit-select" size="6" data-i18n-aria="unit.label"></select>
           <div id="template-info" class="info"></div>
-          <svg id="template-thumb" viewBox="0 0 100 100" aria-label="選択中の型の輪郭"></svg>
+          <svg id="template-thumb" viewBox="0 0 100 100" data-i18n-aria="thumb.aria"></svg>
         </section>
 
         <section id="sec-place">
-          <h2><span class="step">3</span>配置</h2>
-          <p class="hint">地図上の型（オレンジの輪郭）をドラッグして移動します。</p>
+          <h2><span class="step">3</span><span data-i18n="step3.title"></span></h2>
+          <p class="hint" data-i18n="place.hint"></p>
           <div class="row">
-            <label for="width-num">幅（回転前, m）</label>
+            <label for="width-num" data-i18n="place.width"></label>
             <input id="width-range" type="range" min="200" max="20000" step="50" />
             <input id="width-num" type="number" min="50" max="200000" step="10" />
           </div>
           <div class="row">
-            <label for="rot-num">回転（度, 反時計回り）</label>
+            <label for="rot-num" data-i18n="place.rot"></label>
             <input id="rot-range" type="range" min="-180" max="180" step="1" />
             <input id="rot-num" type="number" min="-180" max="180" step="0.5" />
           </div>
           <div class="row buttons">
-            <button id="btn-center" type="button">素材の密な範囲へ戻す</button>
-            <button id="btn-fit" type="button">初期サイズ</button>
+            <button id="btn-center" type="button" data-i18n="place.center"></button>
+            <button id="btn-fit" type="button" data-i18n="place.fit"></button>
           </div>
           <div id="place-info" class="info small"></div>
         </section>
 
         <section id="sec-cut">
-          <h2><span class="step">4</span>型抜き</h2>
-          <label class="check"><input id="auto-cut" type="checkbox" checked /> 配置の操作を終えたら自動で型抜き</label>
+          <h2><span class="step">4</span><span data-i18n="step4.title"></span></h2>
+          <label class="check"><input id="auto-cut" type="checkbox" checked /> <span data-i18n="cut.auto"></span></label>
           <div class="row">
-            <label for="read-mode">素材の読込</label>
+            <label for="read-mode" data-i18n="cut.read"></label>
             <select id="read-mode">
-              <option value="full" selected>ファイル全体を1回取得して保持</option>
-              <option value="range">必要な部分だけ取得（HTTP Range）</option>
+              <option value="full" selected data-i18n="read.full"></option>
+              <option value="range" data-i18n="read.range"></option>
             </select>
           </div>
-          <p class="hint">既定は「全体を1回取得」です。Flateau V2 の都市別ファイルは行グループが大きく、部分取得でもほぼ全体を読むため、1回で取る方が速く済みます（実測値は下に表示）。</p>
+          <p class="hint" data-i18n="cut.readHint"></p>
           <div class="row buttons">
-            <button id="btn-cut" type="button" class="primary">型抜き</button>
-            <button id="btn-force" type="button" hidden>このまま実行</button>
+            <button id="btn-cut" type="button" class="primary" data-i18n="cut.btn"></button>
+            <button id="btn-force" type="button" hidden data-i18n="cut.force"></button>
           </div>
           <div id="job-status" class="status" aria-live="polite"></div>
           <div id="job-stats" class="info small"></div>
         </section>
 
         <section id="sec-view">
-          <h2><span class="step">5</span>鑑賞・出力</h2>
+          <h2><span class="step">5</span><span data-i18n="step5.title"></span></h2>
           <div class="row">
-            <label for="ex-num">高さ倍率</label>
+            <label for="ex-range" data-i18n="view.ex"></label>
             <input id="ex-range" type="range" min="0.5" max="5" step="0.1" value="1" />
-            <output id="ex-num">1.0 倍</output>
+            <output id="ex-num"></output>
           </div>
           <div class="row">
-            <label for="lift-num">持ち上げ量</label>
+            <label for="lift-range" data-i18n="view.lift"></label>
             <input id="lift-range" type="range" min="0" max="500" step="10" value="0" />
-            <output id="lift-num">0 m</output>
+            <output id="lift-num"></output>
           </div>
           <div class="row">
-            <label for="color-mode">色分け</label>
+            <label for="color-mode" data-i18n="view.color"></label>
             <select id="color-mode">
-              <option value="height">高さ</option>
-              <option value="cut">切断の有無</option>
-              <option value="src">高さの出典</option>
+              <option value="height" data-i18n="color.height"></option>
+              <option value="cut" data-i18n="color.cut"></option>
+              <option value="src" data-i18n="color.src"></option>
             </select>
           </div>
-          <label class="check"><input id="show-cand" type="checkbox" checked /> 元の建物（未切断の候補）を表示</label>
-          <label class="check"><input id="show-plinth" type="checkbox" checked /> 台座を表示</label>
-          <label class="check"><input id="show-preview" type="checkbox" checked /> 型のプレビューを表示</label>
+          <label class="check"><input id="show-cand" type="checkbox" checked /> <span data-i18n="view.cand"></span></label>
+          <label class="check"><input id="show-plinth" type="checkbox" checked /> <span data-i18n="view.plinth"></span></label>
+          <label class="check"><input id="show-preview" type="checkbox" checked /> <span data-i18n="view.preview"></span></label>
           <div class="row buttons">
-            <button id="btn-export" type="button" disabled>GeoJSON 出力</button>
+            <button id="btn-export" type="button" disabled data-i18n="view.export"></button>
           </div>
           <div id="legend" class="legend small"></div>
         </section>
 
         <footer id="credits" class="small">
-          <h2>出典・加工</h2>
-          <ul>
-            <li>建物：国土交通省 Project PLATEAU 3D都市モデル（<a href="https://www.mlit.go.jp/plateau/" target="_blank" rel="noopener">PLATEAU</a>）を Pacific Spatial Solutions が変換した <a href="https://source.coop/pacificspatial/flateau-2-0" target="_blank" rel="noopener">Flateau V2</a>（<a href="https://creativecommons.org/licenses/by/4.0/deed.ja" target="_blank" rel="noopener">CC BY 4.0</a>）</li>
-            <li>型：<a href="https://nlftp.mlit.go.jp/ksj/gml/datalist/KsjTmplt-N03-2026.html" target="_blank" rel="noopener">国土数値情報 行政区域データ（N03, 2026年）</a>（国土交通省, オープンデータ CC BY 4.0）。「国土数値情報（行政区域データ）」（国土交通省）を加工して作成</li>
-            <li>背景地図：<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル 淡色地図</a></li>
-            <li>加工：建物フットプリントを行政界（移動・拡縮・回転後）で切断し、高さ属性で押し出して表示。行政界は同一コード内で結合し、座標を小数6桁に丸めています。</li>
-          </ul>
+          <h2 data-i18n="credits.title"></h2>
+          <ul data-i18n-html="credits.html"></ul>
           <p id="engine-info"></p>
         </footer>
       </aside>
@@ -127,10 +128,10 @@
       <main id="map-wrap">
         <div id="map"></div>
         <div id="hud">
-          <div><span class="k">素材</span><span id="hud-material">未選択</span></div>
-          <div><span class="k">型</span><span id="hud-template">未選択</span></div>
-          <div><span class="k">結果</span><span id="hud-result">なし</span></div>
-          <div class="small" id="hud-map">地図：初期化中</div>
+          <div><span class="k" data-i18n="hud.dough"></span><span id="hud-material"></span></div>
+          <div><span class="k" data-i18n="hud.cutter"></span><span id="hud-template"></span></div>
+          <div><span class="k" data-i18n="hud.result"></span><span id="hud-result"></span></div>
+          <div class="small" id="hud-map"></div>
         </div>
       </main>
     </div>

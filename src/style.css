@@ -67,10 +67,12 @@ button.primary { background: var(--accent); color: var(--accent-ink); border-col
   border-radius: 4px; padding: 6px 10px; font-size: 12.5px; line-height: 1.6; max-width: min(520px, 70%);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
-#hud .k { display: inline-block; width: 34px; color: var(--muted); }
+#hud .k { display: inline-block; min-width: 56px; margin-right: 6px; color: var(--muted); }
 .maplibregl-popup-content { font-size: 12px; line-height: 1.5; }
 @media (max-width: 760px) {
   #app { flex-direction: column-reverse; height: auto; }
   #panel { width: 100%; border-right: none; }
   #map-wrap { height: 60vh; flex: none; }
 }
+.title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+button.lang { font-size: 12px; padding: 3px 8px; }

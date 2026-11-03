@@ -7,7 +7,15 @@ import mvpWasm from '@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url';
 import mvpWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url';
 import ehWasm from '@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url';
 import ehWorker from '@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url';
-import type { BBox, CutoutStats, MaterialRef, Req, Res, Stage, StageTiming, Transfer } from './protocol';
+import type { BBox, CutoutStats, MaterialRef, Msg, Req, Res, Stage, StageTiming, Transfer } from './protocol';
+
+/** 画面側で翻訳するエラー */
+class MsgError extends Error {
+  constructor(public msg: Msg) {
+    super(msg.k);
+  }
+}
+const err = (k: string, p?: Msg['p']) => new MsgError({ k, p });
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -68,7 +76,7 @@ let cache: CacheState | null = null;
 
 function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error(message)), ms);
+    const t = setTimeout(() => reject(err(message)), ms);
     p.then(
       (v) => (clearTimeout(t), resolve(v)),
       (e) => (clearTimeout(t), reject(e)),
@@ -81,26 +89,26 @@ function post(msg: Res, transfer: Transferable[] = []) {
 }
 
 function num(v: unknown, name: string): number {
-  if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`数値が不正です: ${name}`);
+  if (typeof v !== 'number' || !Number.isFinite(v)) throw err('e.badNum', { name });
   return v;
 }
 function epsgOk(v: unknown): number {
   const n = num(v, 'EPSG');
   // UTM（WGS84: 32601-32660）または JGD2011 UTM（6688-6692）のみ許可
   if (!Number.isInteger(n) || !((n >= 32601 && n <= 32660) || (n >= 6688 && n <= 6692))) {
-    throw new Error(`解析CRSが許可範囲外です: ${n}`);
+    throw err('e.badCrs', { n });
   }
   return n;
 }
 function bboxOk(b: BBox, name: string): BBox {
   const r = { minx: num(b?.minx, name), miny: num(b?.miny, name), maxx: num(b?.maxx, name), maxy: num(b?.maxy, name) };
-  if (r.minx > r.maxx || r.miny > r.maxy) throw new Error(`範囲が不正です: ${name}`);
+  if (r.minx > r.maxx || r.miny > r.maxy) throw err('e.badRange', { name });
   return r;
 }
 const lit = (n: number) => num(n, 'literal').toPrecision(17);
 
 async function q(sql: string) {
-  if (!conn) throw new Error('DuckDB が初期化されていません');
+  if (!conn) throw err('e.noDb');
   return conn.query(sql);
 }
 async function one<T = Record<string, unknown>>(sql: string): Promise<T> {
@@ -111,7 +119,7 @@ async function one<T = Record<string, unknown>>(sql: string): Promise<T> {
 
 async function init(reqId: number) {
   const t0 = performance.now();
-  post({ type: 'progress', reqId, stage: 'engine', message: 'DuckDB-Wasm を起動中' });
+  post({ type: 'progress', reqId, stage: 'engine', msg: { k: 'w.starting' } });
   const bundle = await duckdb.selectBundle({
     mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
     eh: { mainModule: ehWasm, mainWorker: ehWorker },
@@ -140,13 +148,13 @@ async function init(reqId: number) {
   const worker = new Worker(URL.createObjectURL(new Blob([wrapper], { type: 'text/javascript' })));
   const logger = new duckdb.VoidLogger();
   db = new duckdb.AsyncDuckDB(logger, worker);
-  worker.addEventListener('error', (e) => post({ type: 'error', reqId, stage: 'engine', message: `DuckDB Worker のエラー: ${e.message || '不明'}` }));
+  worker.addEventListener('error', (e) => post({ type: 'error', reqId, stage: 'engine', msg: { k: 'e.dbWorker', p: { msg: e.message || '?' } } }));
   // Blob の Worker からも解決できるよう絶対URLにする。起動が止まったら永久待ちにせずエラーにする
   const abs = (u: string | null | undefined) => (u ? new URL(u, self.location.href).href : u);
   await withTimeout(
     db.instantiate(abs(bundle.mainModule)!, abs(bundle.pthreadWorker)),
     60_000,
-    'DuckDB-Wasm の起動が60秒以内に完了しませんでした',
+    'e.timeoutStart',
   );
   // HTTP は Range による部分取得を使う（全体ダウンロードへのフォールバックは許可しない）
   await db.open({
@@ -154,8 +162,8 @@ async function init(reqId: number) {
   });
   conn = await db.connect();
   const engineVersion = String((await one<{ v: string }>('SELECT version() AS v')).v);
-  post({ type: 'progress', reqId, stage: 'engine', message: `spatial 拡張を読込中（${engineVersion}）` });
-  await withTimeout(q('INSTALL spatial; LOAD spatial;'), 90_000, 'spatial 拡張の読込が90秒以内に完了しませんでした');
+  post({ type: 'progress', reqId, stage: 'engine', msg: { k: 'w.spatial', p: { v: engineVersion } } });
+  await withTimeout(q('INSTALL spatial; LOAD spatial;'), 90_000, 'e.timeoutSpatial');
   const ext = await one<{ v: string }>(
     "SELECT coalesce(extension_version, '') AS v FROM duckdb_extensions() WHERE extension_name = 'spatial'",
   );
@@ -173,21 +181,21 @@ async function setMaterial(reqId: number, ref: MaterialRef, analysisEpsg: number
   const net0 = netSnapshot();
   const epsg = epsgOk(analysisEpsg);
   const SOURCE = /^https:\/\/data\.source\.coop\/pacificspatial\/flateau-2-0\/[\w\-./]+_building_lod0\.parquet$/;
-  if (!SOURCE.test(ref.sourceHref)) throw new Error('素材URLがカタログの形式と一致しません');
+  if (!SOURCE.test(ref.sourceHref)) throw err('e.badUrl');
   if (ref.mirrorBaseUrl) {
     // R2 複製：カタログに記載された置き場所（https）の配下で、公開元と同じファイル名に限る
     const base = ref.mirrorBaseUrl;
     if (!/^https:\/\/[\w.-]+\/[\w\-./%]*$/.test(base) || !ref.href.startsWith(base)) {
-      throw new Error('R2 複製のURLがカタログの置き場所と一致しません');
+      throw err('e.badMirror');
     }
-    if (ref.href.split('/').pop() !== ref.sourceHref.split('/').pop()) throw new Error('R2 複製のファイル名が公開元と一致しません');
+    if (ref.href.split('/').pop() !== ref.sourceHref.split('/').pop()) throw err('e.mirrorName');
     const origin = new URL(base).origin + '/';
     if (!materialHosts.includes(origin)) materialHosts.push(origin);
   } else if (ref.href !== ref.sourceHref) {
-    throw new Error('素材URLが公開元と一致しません');
+    throw err('e.urlMismatch');
   }
-  if (ref.crs !== 'EPSG:6668') throw new Error(`未対応の素材CRSです: ${ref.crs}`);
-  post({ type: 'progress', reqId, stage: 'material', message: 'スキーマを確認中（ヘッダのみ取得）' });
+  if (ref.crs !== 'EPSG:6668') throw err('e.crs', { crs: ref.crs });
+  post({ type: 'progress', reqId, stage: 'material', msg: { k: 'w.schema' } });
   // 素材ごとに別名で登録。別素材のデータを混ぜない
   const fileName = `material_${ref.itemId.replace(/[^\w-]/g, '_')}_${ref.mirrorBaseUrl ? 'r2' : 'origin'}.parquet`;
   await db!.registerFileURL(fileName, ref.href, duckdb.DuckDBDataProtocol.HTTP, false);
@@ -200,7 +208,7 @@ async function setMaterial(reqId: number, ref: MaterialRef, analysisEpsg: number
     if (r.column_name === 'GEOM') geometryType = r.column_type;
   }
   for (const c of ['gml_id', 'measured_height', 'cal_height_m', 'GEOM']) {
-    if (!columns.includes(c)) throw new Error(`素材に必要な列がありません: ${c}`);
+    if (!columns.includes(c)) throw err('e.col', { c });
   }
   const hasBBoxColumns = ['cal_xmin', 'cal_xmax', 'cal_ymin', 'cal_ymax'].every((c) => columns.includes(c));
   // 初期配置の目安：Parquet フッタの行グループ統計（座標列の min/max）だけを使い、
@@ -248,17 +256,17 @@ async function setMaterial(reqId: number, ref: MaterialRef, analysisEpsg: number
 async function setTemplate(reqId: number, code: string, geojson: string, templateEpsg: number) {
   const t0 = performance.now();
   const epsg = epsgOk(templateEpsg);
-  if (!/^\d{5}$/.test(code)) throw new Error('自治体コードが不正です');
+  if (!/^\d{5}$/.test(code)) throw err('e.code');
   let geom: unknown;
   try {
     const parsed = JSON.parse(geojson);
     geom = parsed.type === 'Feature' ? parsed.geometry : parsed;
   } catch {
-    throw new Error('型のGeoJSONを解析できません');
+    throw err('e.gj');
   }
   const g = geom as { type?: string };
-  if (g?.type !== 'Polygon' && g?.type !== 'MultiPolygon') throw new Error('型は Polygon/MultiPolygon である必要があります');
-  post({ type: 'progress', reqId, stage: 'template', message: '型を解析平面へ変換中' });
+  if (g?.type !== 'Polygon' && g?.type !== 'MultiPolygon') throw err('e.geomType');
+  post({ type: 'progress', reqId, stage: 'template', msg: { k: 'w.tplProject' } });
   // GeoJSON はプリペアドステートメントのパラメータとして渡す（SQL文字列へ埋め込まない）
   const stmt = await conn!.prepare(`
     CREATE OR REPLACE TABLE tpl AS
@@ -274,7 +282,7 @@ async function setTemplate(reqId: number, code: string, geojson: string, templat
 /** 素材ファイル全体を取得（full モードのみ）。進捗を返しながら読む */
 async function downloadWhole(url: string, onProgress: (got: number, total: number | null) => void): Promise<Uint8Array> {
   const r = await fetch(url);
-  if (!r.ok || !r.body) throw new Error(`素材ファイルを取得できません（HTTP ${r.status}）`);
+  if (!r.ok || !r.body) throw err('e.download', { s: r.status });
   const total = Number(r.headers.get('content-length')) || null;
   const reader = r.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -312,12 +320,12 @@ function encode(s: string): ArrayBuffer {
 
 async function cutout(req: Extract<Req, { type: 'cutout' }>) {
   const { reqId, jobId } = req;
-  if (!material || material.ref.id !== req.materialId) throw new Error('素材が選択状態と一致しません（再選択してください）');
-  if (!template || template.code !== req.templateCode) throw new Error('型が選択状態と一致しません（再選択してください）');
+  if (!material || material.ref.id !== req.materialId) throw err('e.matMismatch');
+  if (!template || template.code !== req.templateCode) throw err('e.tplMismatch');
   const p = req.placement;
   const cx = num(p.cx, 'cx'), cy = num(p.cy, 'cy'), w0 = num(p.w0, 'w0'), width = num(p.width, 'width');
   const rot = num(p.rotationDeg, 'rotation'), tx = num(p.tx, 'tx'), ty = num(p.ty, 'ty');
-  if (w0 <= 0 || width <= 0 || width > 200_000) throw new Error('幅が不正です');
+  if (w0 <= 0 || width <= 0 || width > 200_000) throw err('e.width');
   const placedBBox = bboxOk(req.placedBBox, 'placedBBox');
   const fetchM = bboxOk(req.fetchBBoxM, 'fetchBBoxM');
   const fetchLL = bboxOk(req.fetchBBoxLonLat, 'fetchBBoxLonLat');
@@ -327,12 +335,12 @@ async function cutout(req: Extract<Req, { type: 'cutout' }>) {
   const tAll = performance.now();
   const net0 = netSnapshot();
   let t = performance.now();
-  const lap = (stage: Stage, note?: string) => {
+  const lap = (stage: Stage, note?: Msg) => {
     const now = performance.now();
     timings.push({ stage, ms: now - t, note });
     t = now;
   };
-  const progress = (stage: Stage, message: string) => post({ type: 'progress', reqId, jobId, stage, message });
+  const progress = (stage: Stage, msg: Msg) => post({ type: 'progress', reqId, jobId, stage, msg });
 
   const E = material.epsg;
   let candidatesBuf: ArrayBuffer | null = null;
@@ -341,16 +349,16 @@ async function cutout(req: Extract<Req, { type: 'cutout' }>) {
   if (!cacheHit) {
     // 読込方式：range = HTTP Range で必要な列・行グループだけ取得／full = ファイル全体を1回取得してメモリに保持
     if (req.readMode === 'full' && !material.fullFile) {
-      progress('fetch', `素材ファイル全体を取得中（${(material.ref.fileSize ?? 0) / 1e6 > 0 ? ((material.ref.fileSize ?? 0) / 1e6).toFixed(1) + ' MB' : '容量不明'}）`);
+      progress('fetch', { k: 'w.fetchWhole', p: { mb: material.ref.fileSize ? (material.ref.fileSize / 1e6).toFixed(1) : '?' } });
       const buf = await downloadWhole(material.ref.href, (got, total) =>
-        progress('fetch', `素材ファイル全体を取得中 ${(got / 1e6).toFixed(1)} / ${total ? (total / 1e6).toFixed(1) : '?'} MB`),
+        progress('fetch', { k: 'w.fetchWholeProg', p: { got: (got / 1e6).toFixed(1), total: total ? (total / 1e6).toFixed(1) : '?' } }),
       );
       const name = material.fileName.replace(/\.parquet$/, '_full.parquet');
       const size = buf.byteLength; // registerFileBuffer で buf は Worker へ移され長さ0になる
       await db!.registerFileBuffer(name, buf);
       material.fullFile = name;
       material.fullBytes = size;
-      lap('fetch', `ファイル全体 ${(size / 1e6).toFixed(1)} MB をメモリに保持`);
+      lap('fetch', { k: 'n.whole', p: { mb: (size / 1e6).toFixed(1) } });
     }
     const F = req.readMode === 'full' && material.fullFile ? material.fullFile : material.fileName;
     // 取得矩形（外接矩形＋余白）に重なる元の建物を、切断前の形と高さのまま取得する
@@ -359,7 +367,7 @@ async function cutout(req: Extract<Req, { type: 'cutout' }>) {
       : `ST_Intersects(GEOM, ST_MakeEnvelope(${lit(fetchLL.minx)}, ${lit(fetchLL.miny)}, ${lit(fetchLL.maxx)}, ${lit(fetchLL.maxy)}))`;
     // 件数の上限確認は取得と同じ1回の読込で行う（上限+1件で止める）。超えた場合は結果を捨てて確認を求める。間引きはしない
     const limit = req.force ? '' : `LIMIT ${maxCandidates + 1}`;
-    progress('fetch', '取得矩形に重なる元の建物を取得・投影中');
+    progress('fetch', { k: 'w.fetchCand' });
     await q('DROP TABLE IF EXISTS cand; DROP TABLE IF EXISTS res;');
     cache = null;
     await q(`
@@ -379,13 +387,13 @@ async function cutout(req: Extract<Req, { type: 'cutout' }>) {
     const n0 = Number((await one<{ n: number }>('SELECT count(*)::INT AS n FROM cand')).n);
     if (!req.force && n0 > maxCandidates) {
       await q('DROP TABLE IF EXISTS cand;');
-      lap('fetch', `${maxCandidates} 件超で停止`);
+      lap('fetch', { k: 'n.overLimit', p: { n: maxCandidates } });
       post({ type: 'needsConfirm', reqId, jobId, candidates: n0, limit: maxCandidates, ms: performance.now() - tAll, timings, transfer: await netDelta(net0) });
       return;
     }
     const cs = await one<{ n: number; v: number }>('SELECT count(*)::INT AS n, coalesce(sum(ST_NPoints(geom)), 0)::BIGINT AS v FROM cand');
     cache = { materialId: material.ref.id, epsg: E, bboxM: fetchM, count: Number(cs.n), vertices: Number(cs.v) };
-    lap('fetch', `${cache.count} 件 / ${cache.vertices} 頂点`);
+    lap('fetch', { k: 'n.cand', p: { n: cache.count, v: cache.vertices } });
     // 表示用：未切断の元の建物（経緯度）
     const cj = await one<{ j: string }>(`
       SELECT '{"type":"FeatureCollection","features":[' || coalesce(string_agg(
@@ -393,11 +401,11 @@ async function cutout(req: Extract<Req, { type: 'cutout' }>) {
         '},"geometry":' || ST_AsGeoJSON(ST_Transform(geom, 'EPSG:${E}', 'EPSG:4326', always_xy := true)) || '}', ','), '') || ']}' AS j
       FROM cand`);
     candidatesBuf = encode(cj.j);
-    lap('fetch', '候補の表示用GeoJSON');
+    lap('fetch', { k: 'n.candGeo' });
   }
 
   // 型の配置（ST_Affine）。同じ自治体の MultiPolygon 全体に同じ変換をかける
-  progress('intersect', '型を配置して切断中');
+  progress('intersect', { k: 'w.cutting' });
   const s = width / w0;
   const th = (rot * Math.PI) / 180;
   const a = s * Math.cos(th), b = -s * Math.sin(th), d = s * Math.sin(th), e = s * Math.cos(th);
@@ -426,7 +434,7 @@ async function cutout(req: Extract<Req, { type: 'cutout' }>) {
           WHERE (ST_NPoints(g) <= ${PIECE_MAX_VERTICES} OR depth >= 24) AND NOT ST_IsEmpty(g))
     WHERE ST_Dimension(x.geom) = 2`);
   const pc = await one<{ n: number }>('SELECT count(*)::INT AS n FROM pieces');
-  lap('intersect', `型を ${pc.n} 片に分割`);
+  lap('intersect', { k: 'n.pieces', p: { n: Number(pc.n) } });
   const pb = await one<{ x0: number; y0: number; x1: number; y1: number; n: number }>(
     'SELECT ST_XMin(g) AS x0, ST_YMin(g) AS y0, ST_XMax(g) AS x1, ST_YMax(g) AS y1 FROM placed',
   );
@@ -460,9 +468,9 @@ async function cutout(req: Extract<Req, { type: 'cutout' }>) {
            count(*) FILTER (WHERE NOT ST_IsValid(g))::INT AS invalid,
            count(*) FILTER (WHERE height_m IS NULL)::INT AS hmiss
     FROM res`);
-  lap('intersect', `${st.n} 件`);
+  lap('intersect', { k: 'n.out', p: { n: Number(st.n) } });
 
-  progress('export', 'GeoJSON に変換中');
+  progress('export', { k: 'w.export' });
   const tplCode = template.code;
   const mid = material.ref.id;
   const rj = await one<{ j: string }>(`
@@ -546,8 +554,8 @@ ctx.onmessage = (ev: MessageEvent<Req>) => {
           break;
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      post({ type: 'error', reqId: req.reqId, jobId: req.type === 'cutout' ? req.jobId : undefined, stage: STAGE_OF[req.type], message });
+      const msg: Msg = e instanceof MsgError ? e.msg : { k: 'e.raw', p: { text: e instanceof Error ? e.message : String(e) } };
+      post({ type: 'error', reqId: req.reqId, jobId: req.type === 'cutout' ? req.jobId : undefined, stage: STAGE_OF[req.type], msg });
     }
   });
 };

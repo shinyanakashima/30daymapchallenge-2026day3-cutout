@@ -1,7 +1,8 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
 import './style.css';
 import maplibregl from 'maplibre-gl';
-import { AnalysisClient } from './lib/analysis';
+import { AnalysisClient, WorkerError } from './lib/analysis';
+import { applyStatic, lang, numberLocale, PREF_EN, PREF_JA, setLang, t } from './lib/i18n';
 import {
   loadMaterials,
   loadMirrorCatalog,
@@ -9,8 +10,6 @@ import {
   loadPrefectures,
   loadTemplateFeature,
   loadTemplateIndex,
-  materialLabel,
-  materialPrefecture,
   type Material,
   type PrefectureEntry,
   type TemplateUnit,
@@ -30,7 +29,7 @@ import {
   type MultiPoly,
   type TemplateGeom,
 } from './lib/geo';
-import type { CutoutStats, Placement, Res, Stage } from './worker/protocol';
+import type { CutoutStats, Msg, Placement, Res, Stage, StageTiming } from './worker/protocol';
 
 // ---- 設定値（固定件数ではなく、処理量の目安） ----
 const MAX_CANDIDATES = 80_000; // 取得矩形内の元の建物数がこれを超えたら確認を求める（間引きはしない）
@@ -41,9 +40,52 @@ const DEFAULT_PREF = '01';
 const DEFAULT_UNIT = '01202'; // 函館市
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
-const fmt = (n: number) => n.toLocaleString('ja-JP');
-const fmtMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)} 秒` : `${Math.round(ms)} ms`);
-const fmtBytes = (b: number | null) => (b == null ? '不明' : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(0)} KB`);
+const fmt = (n: number) => n.toLocaleString(numberLocale());
+const fmtMs = (ms: number) => (ms >= 1000 ? t('s.sec', { n: (ms / 1000).toFixed(1) }) : t('s.ms', { n: Math.round(ms) }));
+const fmtBytes = (b: number | null) => (b == null ? t('unknown') : b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(0)} KB`);
+/** Worker からの文言（キー＋値）を翻訳する。数値は桁区切り */
+const tm = (m: Msg) =>
+  t(m.k, m.p && Object.fromEntries(Object.entries(m.p).map(([k, v]) => [k, typeof v === 'number' ? fmt(v) : v])));
+const stageLabel = (s?: string) => (s ? t(`stage.${s}`) : t('stage.unknown'));
+const errText = (e: unknown) => (e instanceof WorkerError ? tm(e.msg) : e instanceof Error ? e.message : String(e));
+const timingText = (ts: StageTiming[]) =>
+  ts.map((x) => `${stageLabel(x.stage)} ${fmtMs(x.ms)}${x.note ? ` (${tm(x.note)})` : ''}`).join(' / ');
+
+/** 都道府県名（言語別）。JA 名からコードを引く */
+function prefName(code: string) {
+  const i = Number(code) - 1;
+  return lang === 'ja' ? PREF_JA[i] : PREF_EN[i];
+}
+function prefNameFromJa(ja: string) {
+  const i = PREF_JA.indexOf(ja);
+  return i < 0 ? ja : lang === 'ja' ? ja : PREF_EN[i];
+}
+/** STAC Item ID（例 sapporo-shi-01100）からローマ字の自治体名（Sapporo-shi）を作る */
+function romajiFromItemId(itemId: string) {
+  const slug = itemId.replace(/-\d{5}$/, '');
+  return slug
+    .split('-')
+    .map((w, i, a) => (i === a.length - 1 && /^(shi|ku|cho|machi|mura|son|town|city)$/.test(w) ? w : w[0].toUpperCase() + w.slice(1)))
+    .join('-')
+    .replace(/-(shi|ku|cho|machi|mura|son)$/, '-$1');
+}
+function materialLabel(m: Material) {
+  if (lang === 'ja') return `${m.areaJa ? m.areaJa.replace('_', ' ') : m.title}（${m.fiscalYear ?? t('unknown')}年度）`;
+  return `${romajiFromItemId(m.itemId)}, ${prefNameFromJa(materialPrefectureJa(m))} (FY${m.fiscalYear ?? '?'})`;
+}
+function materialShort(m: Material) {
+  return lang === 'ja' ? (m.areaJa?.split('_')[1] ?? m.title) : romajiFromItemId(m.itemId);
+}
+function materialPrefectureJa(m: Material) {
+  return m.areaJa?.split('_')[0] ?? '';
+}
+/** 型の自治体名。英語表示ではローマ字が分かる場合（PLATEAU 対象都市）に併記する */
+const romajiByJis = new Map<string, string>();
+function unitName(u: { code: string; name: string }) {
+  if (lang === 'ja') return u.name;
+  const r = romajiByJis.get(u.code);
+  return r ? `${r} ${u.name}` : u.name;
+}
 
 interface ResultState {
   fc: GeoJSON.FeatureCollection;
@@ -87,7 +129,7 @@ const state = {
 
 // ---- 解析Worker ----
 const client = new AnalysisClient();
-client.onFatal = (msg) => setStatus(msg, 'error');
+client.onFatal = (msg) => setStatus(() => tm(msg), 'error');
 
 // ---- 地図 ----
 const map = new maplibregl.Map({
@@ -100,7 +142,7 @@ const map = new maplibregl.Map({
         tiles: ['https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png'],
         tileSize: 256,
         maxzoom: 18,
-        attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">地理院タイル</a>',
+        attribution: '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank">GSI Tiles</a>',
       },
     },
     layers: [
@@ -122,19 +164,21 @@ const empty: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: 
 let mapLoaded = false;
 let tileErrors = 0;
 
-function setMapStatus(s: string) {
-  $('hud-map').textContent = `地図：${s}${tileErrors ? `（背景タイル取得エラー ${tileErrors} 件）` : ''}`;
+let mapStatusKey = 'map.init';
+function setMapStatus(key: string) {
+  mapStatusKey = key;
+  $('hud-map').textContent = t(key) + (tileErrors ? t('map.tileErr', { n: tileErrors }) : '');
 }
 map.on('error', (e) => {
-  const msg = (e as { error?: Error }).error?.message ?? '不明';
+  const msg = (e as { error?: Error }).error?.message ?? '?';
   if ((e as { sourceId?: string }).sourceId === 'gsi' || /tile|cyberjapandata/i.test(msg)) tileErrors++;
-  else setStatus(`地図のエラー：${msg}`, 'error');
-  setMapStatus(mapLoaded ? '表示中' : '初期化中');
+  else setStatus(() => t('map.err', { msg }), 'error');
+  setMapStatus(mapLoaded ? 'map.shown' : 'map.init');
 });
 map.on('idle', () => {
-  if (mapLoaded) setMapStatus(map.areTilesLoaded() ? '描画完了' : '描画中');
+  if (mapLoaded) setMapStatus(map.areTilesLoaded() ? 'map.done' : 'map.drawing');
 });
-map.on('dataloading', () => mapLoaded && setMapStatus('描画中'));
+map.on('dataloading', () => mapLoaded && setMapStatus('map.drawing'));
 
 const heightColor: maplibregl.ExpressionSpecification = [
   'interpolate', ['linear'], ['coalesce', ['get', 'height_m'], 0],
@@ -151,7 +195,7 @@ const colorModes: Record<string, maplibregl.ExpressionSpecification> = {
 
 map.on('load', () => {
   mapLoaded = true;
-  setMapStatus('読込完了');
+  setMapStatus('map.loaded');
   map.addSource('coverage', { type: 'geojson', data: empty });
   map.addSource('cand', { type: 'geojson', data: empty });
   map.addSource('plinth', { type: 'geojson', data: empty });
@@ -195,52 +239,48 @@ function src(id: string) {
 // ---- 状態表示 ----
 let statusTimer = 0;
 let statusStart = 0;
-function setStatus(text: string, kind: 'busy' | 'ok' | 'error' | 'warn' | '' = '') {
+type Kind = 'busy' | 'ok' | 'error' | 'warn' | '';
+/** 状態表示。言語切替で作り直せるよう、文言は関数で受け取る */
+let lastStatus: { text: () => string; kind: Kind } = { text: () => '', kind: '' };
+function setStatus(text: () => string, kind: Kind = '') {
+  lastStatus = { text, kind };
   const el = $('job-status');
-  el.textContent = text;
+  el.textContent = text();
   el.className = `status ${kind}`;
 }
 function startBusy(label: () => string) {
   statusStart = performance.now();
   window.clearInterval(statusTimer);
-  const tick = () => setStatus(`${label()}\n経過 ${fmtMs(performance.now() - statusStart)}`, 'busy');
+  const tick = () => setStatus(() => `${label()}\n${t('st.elapsed', { t: fmtMs(performance.now() - statusStart) })}`, 'busy');
   tick();
   statusTimer = window.setInterval(tick, 200);
 }
 function stopBusy() {
   window.clearInterval(statusTimer);
 }
-const STAGE_LABEL: Record<Stage, string> = {
-  engine: '解析エンジン',
-  material: '素材',
-  template: '型',
-  count: '候補数の確認',
-  fetch: '候補取得',
-  intersect: '切断',
-  export: '出力',
-  done: '完了',
-};
 
 function updateHud() {
   const m = state.material;
   $('hud-material').textContent = m
-    ? `${materialLabel(m)} ／ ${m.itemId}${state.materialReady ? '' : '（準備中）'}`
-    : '未選択';
+    ? `${materialLabel(m)} / ${m.itemId}${state.materialReady ? '' : t('hud.preparing')}`
+    : t('hud.none');
   const u = state.unit;
   $('hud-template').textContent = u
-    ? `${u.name}（${state.prefs.find((p) => p.code === state.prefCode)?.name ?? ''}・${u.code}）の行政界${state.templateReady ? '' : '（準備中）'}`
-    : '未選択';
+    ? t('hud.tpl', { name: unitName(u), pref: prefName(state.prefCode), code: u.code }) + (state.templateReady ? '' : t('hud.preparing'))
+    : t('hud.none');
   const r = state.result;
-  if (!r) $('hud-result').textContent = 'なし';
+  if (!r) $('hud-result').textContent = t('hud.noresult');
   else {
     const same = sameAsCurrentPlacement(r.placement);
-    $('hud-result').textContent = `${fmt(r.stats.outputFeatures)} 件（型：${templateName(r.templateCode)}、建物：${
-      state.materials.find((x) => x.id === r.materialId)?.areaJa?.replace('_', ' ') ?? r.materialId
-    }）${same ? '' : ' ※前回の配置の結果'}`;
+    const mm = state.materials.find((x) => x.id === r.materialId);
+    $('hud-result').textContent =
+      t('hud.res', { n: fmt(r.stats.outputFeatures), tpl: templateName(r.templateCode), mat: mm ? materialShort(mm) : r.materialId }) +
+      (same ? '' : t('hud.stale'));
   }
 }
 function templateName(code: string) {
-  return state.units.find((u) => u.code === code)?.name ?? code;
+  const u = state.units.find((x) => x.code === code);
+  return u ? unitName(u) : code;
 }
 
 // ---- 素材 ----
@@ -251,8 +291,8 @@ function renderMaterialList() {
   const groups = new Map<string, HTMLOptGroupElement>();
   for (const m of state.materials) {
     const label = materialLabel(m);
-    if (q && !(`${label} ${m.itemId} ${m.title}`.includes(q))) continue;
-    const pref = materialPrefecture(m);
+    if (q && !`${label} ${m.itemId} ${m.title} ${m.areaJa ?? ''}`.toLowerCase().includes(q.toLowerCase())) continue;
+    const pref = prefNameFromJa(materialPrefectureJa(m));
     let g = groups.get(pref);
     if (!g) {
       g = document.createElement('optgroup');
@@ -262,7 +302,7 @@ function renderMaterialList() {
     }
     const o = document.createElement('option');
     o.value = m.id;
-    o.textContent = `${label}  ${m.rowCount != null ? fmt(m.rowCount) + '棟' : ''}`;
+    o.textContent = `${label}  ${m.rowCount != null ? t('material.count', { n: fmt(m.rowCount) }) : ''}`;
     if (state.material?.id === m.id) o.selected = true;
     g.appendChild(o);
   }
@@ -276,18 +316,18 @@ function renderMaterialInfo() {
     return;
   }
   const rows: [string, string][] = [
-    ['素材', materialLabel(m)],
-    ['データ年度', `${m.fiscalYear ?? '不明'}（${m.startDatetime?.slice(0, 10) ?? '?'} 〜 ${m.endDatetime?.slice(0, 10) ?? '?'}）`],
-    ['建物数', m.rowCount != null ? `${fmt(m.rowCount)} 棟` : '不明'],
-    ['容量', fmtBytes(m.fileSize)],
-    ['範囲', m.bbox.map((v) => v.toFixed(4)).join(', ')],
+    [t('info.material'), materialLabel(m)],
+    [t('info.year'), `${m.fiscalYear ?? t('unknown')} (${m.startDatetime?.slice(0, 10) ?? '?'} – ${m.endDatetime?.slice(0, 10) ?? '?'})`],
+    [t('info.buildings'), m.rowCount != null ? t('info.buildingsN', { n: fmt(m.rowCount) }) : t('unknown')],
+    [t('info.size'), fmtBytes(m.fileSize)],
+    [t('info.extent'), m.bbox.map((v) => v.toFixed(4)).join(', ')],
     ['STAC Item', m.itemId],
-    ['asset', `${m.asset}（${m.crs ?? 'CRS不明'}）`],
-    ['取得元', useMirror(m) ? `R2 の複製（${fmtBytes(mirrorFor(m)!.bytes)}、公開元と同一ファイル）` : '公開元 source.coop'],
-    ['解析CRS', state.materialEpsg ? `EPSG:${state.materialEpsg}（UTM ${state.materialEpsg - 32600}N）` : '-'],
+    ['asset', `${m.asset} (${m.crs ?? '?'})`],
+    [t('info.source'), useMirror(m) ? t('info.r2val', { size: fmtBytes(mirrorFor(m)!.bytes) }) : t('info.originval')],
+    [t('info.crs'), state.materialEpsg ? `EPSG:${state.materialEpsg} (UTM ${state.materialEpsg - 32600}N)` : '-'],
   ];
   el.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join('') +
-    `<dt>URL</dt><dd><a href="${m.href}" target="_blank" rel="noopener">parquet</a> / <a href="${m.itemHref}" target="_blank" rel="noopener">STAC</a>${
+    `<dt>${t('info.links')}</dt><dd><a href="${m.href}" target="_blank" rel="noopener">parquet</a> / <a href="${m.itemHref}" target="_blank" rel="noopener">STAC</a>${
       m.sourcePage ? ` / <a href="${m.sourcePage}" target="_blank" rel="noopener">PLATEAU</a>` : ''
     }</dd>`;
 }
@@ -307,7 +347,7 @@ function showCoverage() {
   });
 }
 
-function clearResult(reason: string) {
+function clearResult(reason: () => string) {
   const had = !!state.result;
   state.result = null;
   if (mapLoaded) {
@@ -316,6 +356,7 @@ function clearResult(reason: string) {
   }
   ($('btn-export') as HTMLButtonElement).disabled = true;
   $('job-stats').innerHTML = '';
+  lastStatsRender = null;
   $('legend').innerHTML = '';
   if (had) setStatus(reason, '');
   updateHud();
@@ -333,7 +374,7 @@ function syncSourceOptions() {
   const opt = sel.querySelector('option[value="r2"]') as HTMLOptionElement;
   const mi = mirrorFor(state.material);
   opt.disabled = !mi;
-  opt.textContent = mi ? 'R2 の複製（geo-opendata）' : 'R2 の複製（この素材は未登録）';
+  opt.textContent = mi ? t('source.r2') : t('source.r2none');
   if (!mi) sel.value = 'origin';
 }
 
@@ -351,14 +392,15 @@ async function selectMaterial(id: string, reload = false, keepPlacement = false)
   state.materialEpsg = utmEpsg((m.bbox[0] + m.bbox[2]) / 2);
   state.denseCenter = null;
   // 旧素材の結果・候補は消す（別素材のデータを混ぜない）
-  clearResult('素材を切り替えたため、前の結果を消去しました');
+  clearResult(() => t('st.clearedMat'));
   state.candidatesFor = null;
   if (mapLoaded) src('cand')?.setData(empty);
   syncSourceOptions();
   renderMaterialInfo();
   showCoverage();
   updateHud();
-  setStatus(`素材を準備中：${materialLabel(m)}（取得元：${useMirror(m) ? 'R2 の複製' : '公開元 source.coop'}）`, 'busy');
+  const srcKey = useMirror(m) ? 'src.r2' : 'src.origin';
+  setStatus(() => t('st.matPreparing', { name: materialLabel(m), src: t(srcKey) }), 'busy');
   try {
     const r = await client.request({
       type: 'setMaterial',
@@ -380,7 +422,14 @@ async function selectMaterial(id: string, reload = false, keepPlacement = false)
     state.denseCenter = r.denseCenter;
     state.materialLoad = { ms: r.ms, transfer: r.transfer };
     setStatus(
-      `素材の準備完了（${fmtMs(r.ms)}、取得 ${fmtBytes(r.transfer.bytes)}・${r.transfer.requests} 要求）。GEOM型：${r.geometryType}${r.hasBBoxColumns ? '' : '／bbox列なし'}`,
+      () =>
+        t('st.matReady', {
+          t: fmtMs(r.ms),
+          b: fmtBytes(r.transfer.bytes),
+          n: r.transfer.requests,
+          g: r.geometryType,
+          nb: r.hasBBoxColumns ? '' : t('st.noBBox'),
+        }),
       'ok',
     );
     if (keepPlacement) scheduleAutoCut();
@@ -389,7 +438,7 @@ async function selectMaterial(id: string, reload = false, keepPlacement = false)
     updateHud();
   } catch (e) {
     if (seq !== state.materialSeq) return;
-    setStatus(`素材の準備に失敗：${(e as Error).message}`, 'error');
+    setStatus(() => t('st.matFail', { msg: errText(e) }), 'error');
   }
 }
 
@@ -431,7 +480,7 @@ function renderPrefectures() {
   for (const p of state.prefs) {
     const o = document.createElement('option');
     o.value = p.code;
-    o.textContent = p.ready ? `${p.name}（${p.units}）` : `${p.name}（未整備）`;
+    o.textContent = p.ready ? t('pref.ready', { name: prefName(p.code), n: p.units }) : t('pref.notReady', { name: prefName(p.code) });
     o.disabled = !p.ready;
     sel.appendChild(o);
   }
@@ -444,8 +493,8 @@ function renderUnits() {
   sel.innerHTML = '';
   const groups = new Map<string, HTMLOptGroupElement>();
   for (const u of state.units) {
-    if (q && !`${u.name} ${u.code} ${u.group ?? ''}`.includes(q)) continue;
-    const key = u.group ?? 'すべて';
+    if (q && !`${unitName(u)} ${u.code} ${u.group ?? ''}`.toLowerCase().includes(q.toLowerCase())) continue;
+    const key = u.group ?? t('unit.all');
     let g = groups.get(key);
     if (!g) {
       g = document.createElement('optgroup');
@@ -455,8 +504,8 @@ function renderUnits() {
     }
     const o = document.createElement('option');
     o.value = u.code;
-    const kind = u.kind === 'designated-city' ? '（市全体）' : u.kind === 'ward' ? '' : '';
-    o.textContent = `${u.name}${kind}${u.parts > 1 ? `  ${u.parts}片` : ''}`;
+    const kind = u.kind === 'designated-city' ? t('unit.wholeCity') : '';
+    o.textContent = `${unitName(u)}${kind}${u.parts > 1 ? `  ${t('unit.parts', { n: u.parts })}` : ''}`;
     if (state.unit?.code === u.code) o.selected = true;
     g.appendChild(o);
   }
@@ -483,10 +532,10 @@ async function selectUnit(code: string) {
   state.unit = u;
   state.templateReady = false;
   state.tgeom = null;
-  clearResult('型を切り替えたため、前の結果を消去しました');
+  clearResult(() => t('st.clearedTpl'));
   renderUnits();
   updateHud();
-  $('template-info').textContent = '型を読込中…';
+  $('template-info').textContent = t('tpl.loading');
   try {
     const pp = state.prefCode;
     const f = await loadTemplateFeature(pp, code);
@@ -494,11 +543,7 @@ async function selectUnit(code: string) {
     const tg = prepareTemplate(f.geometry);
     state.tgeom = tg;
     drawThumb(f.geometry);
-    const kindLabel = u.kind === 'designated-city' ? '政令指定都市（区を結合）' : u.kind === 'ward' ? '政令指定都市の区' : '市区町村';
-    $('template-info').innerHTML =
-      `<b>${escapeHtml(u.name)}</b>（${escapeHtml(state.prefs.find((p) => p.code === pp)?.name ?? '')}・${u.code}・${kindLabel}）<br>` +
-      `元の大きさ：幅 ${(tg.w0 / 1000).toFixed(1)} km × 高さ ${(tg.h0 / 1000).toFixed(1)} km／${u.parts} 片（離島等を含む）／${fmt(u.vertices)} 頂点<br>` +
-      `<span class="hint">この名前は型の形の出どころです。切り抜かれる建物は素材の街のものです。</span>`;
+    renderTemplateInfo();
     const r = await client.request({
       type: 'setTemplate',
       code,
@@ -516,8 +561,19 @@ async function selectUnit(code: string) {
     scheduleAutoCut();
   } catch (e) {
     if (seq !== state.templateSeq) return;
-    $('template-info').textContent = `型の読込に失敗：${(e as Error).message}`;
+    $('template-info').textContent = t('tpl.failed', { msg: errText(e) });
   }
+}
+
+function renderTemplateInfo() {
+  const u = state.unit;
+  const tg = state.tgeom;
+  if (!u || !tg) return;
+  const kindLabel = t(u.kind === 'designated-city' ? 'kind.designated' : u.kind === 'ward' ? 'kind.ward' : 'kind.muni');
+  $('template-info').innerHTML =
+    `<b>${escapeHtml(unitName(u))}</b> (${escapeHtml(prefName(state.prefCode))} · ${u.code} · ${kindLabel})<br>` +
+    t('tpl.size', { w: (tg.w0 / 1000).toFixed(1), h: (tg.h0 / 1000).toFixed(1), parts: fmt(u.parts), v: fmt(u.vertices) }) +
+    `<br><span class="hint">${t('tpl.note')}</span>`;
 }
 
 function drawThumb(g: GeoJSON.Polygon | GeoJSON.MultiPolygon) {
@@ -564,16 +620,23 @@ function syncPlacementInputs() {
 }
 
 function updatePlaceInfo() {
-  const t = state.tgeom;
-  if (!t || !state.material) {
+  const tg = state.tgeom;
+  if (!tg || !state.material) {
     $('place-info').textContent = '';
     return;
   }
   const [lon, lat] = fromUtm(state.materialEpsg, state.tx, state.ty);
-  const s = state.width / t.w0;
-  $('place-info').innerHTML =
-    `中心 ${lon.toFixed(5)}, ${lat.toFixed(5)}／倍率 ${s.toFixed(4)}（元の幅 ${(t.w0 / 1000).toFixed(1)} km → ${(state.width / 1000).toFixed(2)} km、高さ ${((t.h0 * s) / 1000).toFixed(2)} km）<br>` +
-    `型の原点：型の外接矩形の中心／型CRS EPSG:${t.epsg} → 素材CRS EPSG:${state.materialEpsg}`;
+  const s = state.width / tg.w0;
+  $('place-info').innerHTML = t('place.info', {
+    lon: lon.toFixed(5),
+    lat: lat.toFixed(5),
+    s: s.toFixed(4),
+    w0: (tg.w0 / 1000).toFixed(1),
+    w: (state.width / 1000).toFixed(2),
+    h: ((tg.h0 * s) / 1000).toFixed(2),
+    a: tg.epsg,
+    b: state.materialEpsg,
+  });
 }
 
 let previewRaf = 0;
@@ -669,14 +732,14 @@ function setupPopup() {
     if (!f || !state.result) return;
     const p = f.properties as Record<string, unknown>;
     const m = state.materials.find((x) => x.id === state.result!.materialId);
-    const h = p.height_m == null || p.height_m === 'null' ? '不明（0 m 扱いで表示）' : `${Number(p.height_m).toFixed(1)} m（${p.height_src}）`;
+    const h = p.height_m == null || p.height_m === 'null' ? t('pp.hUnknown') : `${Number(p.height_m).toFixed(1)} m (${p.height_src})`;
     new maplibregl.Popup({ maxWidth: '320px' })
       .setLngLat(e.lngLat)
       .setHTML(
-        `<b>建物</b> ${escapeHtml(String(p.gml_id))}<br>高さ：${escapeHtml(h)}<br>` +
-          `${p.cut === true || p.cut === 'true' ? '型の境界で切断' : '切断なし（型の内側）'}<br>` +
-          `建物の出どころ：${escapeHtml(m ? materialLabel(m) : state.result.materialId)}<br>` +
-          `型：${escapeHtml(templateName(state.result.templateCode))}（${state.result.templateCode}）`,
+        `<b>${t('pp.building')}</b> ${escapeHtml(String(p.gml_id))}<br>${t('pp.height')}: ${escapeHtml(h)}<br>` +
+          `${p.cut === true || p.cut === 'true' ? t('pp.cut') : t('pp.whole')}<br>` +
+          `${t('pp.from')}: ${escapeHtml(m ? materialLabel(m) : state.result.materialId)}<br>` +
+          `${t('pp.cutter')}: ${escapeHtml(templateName(state.result.templateCode))} (${state.result.templateCode})`,
       )
       .addTo(map);
   });
@@ -687,7 +750,7 @@ function setupPopup() {
 // ---- 型抜き ----
 async function runCutout(force: boolean) {
   if (!state.material || !state.materialReady || !state.tgeom || !state.templateReady || !state.unit) {
-    setStatus('素材と型の準備が終わってから型抜きできます', 'warn');
+    setStatus(() => t('st.notReady'), 'warn');
     return;
   }
   if (state.activeJob) {
@@ -703,7 +766,7 @@ async function runCutout(force: boolean) {
   const placedLL = bboxMToLonLat(E, placed.bboxM);
   const cover = { minx: m.bbox[0], miny: m.bbox[1], maxx: m.bbox[2], maxy: m.bbox[3] };
   if (!bboxIntersects(placedLL, cover)) {
-    setStatus('型が素材の提供範囲（点線の矩形）の外にあります。素材の範囲内へ移動してください。', 'error');
+    setStatus(() => t('st.outside'), 'error');
     return;
   }
   const partial = !bboxContains(cover, placedLL);
@@ -712,8 +775,8 @@ async function runCutout(force: boolean) {
   const fetchLL = bboxMToLonLat(E, fetchM);
   const jobId = ++state.jobSeq;
   state.activeJob = jobId;
-  let stageText = '開始';
-  startBusy(() => `型抜き中（${unit.name} × ${materialLabel(m)}）：${stageText}`);
+  let stageText = () => t('st.start');
+  startBusy(() => t('st.cutting', { tpl: unitName(unit), mat: materialShort(m), stage: stageText() }));
   try {
     const r = await client.request(
       {
@@ -730,27 +793,25 @@ async function runCutout(force: boolean) {
         force,
       },
       (pr: Res) => {
-        if (pr.type === 'progress') stageText = `${STAGE_LABEL[pr.stage]} — ${pr.message}`;
+        if (pr.type === 'progress') stageText = () => `${stageLabel(pr.stage)} — ${tm(pr.msg)}`;
       },
     );
     stopBusy();
     if (r.type === 'needsConfirm') {
-      setStatus(
-        `取得矩形内の元の建物が目安の ${fmt(r.limit)} 件を超えました（${fmt(r.limit)} 件を超えた時点で読込を停止）。\n` +
-          '型の幅を小さくするか、「このまま実行」を押してください（建物を間引くことはしません）。',
-        'warn',
-      );
+      setStatus(() => t('st.limit', { n: fmt(r.limit) }), 'warn');
       ($('btn-force') as HTMLButtonElement).hidden = false;
-      $('job-stats').innerHTML =
-        `判定までの所要時間：${r.timings.map((x) => `${STAGE_LABEL[x.stage]} ${fmtMs(x.ms)}${x.note ? `（${x.note}）` : ''}`).join(' / ')}<br>` +
-        `素材の取得（実測）：${fmtBytes(r.transfer.bytes)}／${r.transfer.requests} 要求<br>` +
-        (state.result ? '地図には前回の型抜き結果を表示しています。' : '');
+      const hadResult = !!state.result;
+      lastStatsRender = () =>
+        ($('job-stats').innerHTML =
+          t('st.limitStats', { t: timingText(r.timings), b: fmtBytes(r.transfer.bytes), n: r.transfer.requests }) +
+          (hadResult ? `<br>${t('st.prevShown')}` : ''));
+      lastStatsRender();
       return;
     }
     if (r.type !== 'cutoutResult') return;
     // 古い計算結果で新しい選択を上書きしない
     if (r.materialId !== state.material?.id || r.templateCode !== state.unit?.code) {
-      setStatus('素材または型が変わったため、古い計算結果を破棄しました', 'warn');
+      setStatus(() => t('st.stale'), 'warn');
       return;
     }
     const dec = new TextDecoder();
@@ -778,8 +839,8 @@ async function runCutout(force: boolean) {
     updateHud();
   } catch (e) {
     stopBusy();
-    const err = e as Error & { stage?: Stage };
-    setStatus(`型抜きに失敗（${err.stage ? STAGE_LABEL[err.stage] : '不明な段階'}）：${err.message}`, 'error');
+    const stage = e instanceof WorkerError ? (e.stage as Stage | undefined) : undefined;
+    setStatus(() => t('st.cutFail', { stage: stageLabel(stage), msg: errText(e) }), 'error');
   } finally {
     state.activeJob = 0;
     if (state.pendingCut) {
@@ -789,32 +850,30 @@ async function runCutout(force: boolean) {
   }
 }
 
+let lastStatsRender: (() => void) | null = null;
 function renderStats(s: CutoutStats, partial: boolean) {
-  const lines: string[] = [];
-  let kind: 'ok' | 'warn' = 'ok';
-  if (s.outputFeatures === 0) {
-    kind = 'warn';
-    lines.push(
-      s.candidatesInCache === 0
-        ? '取得矩形に建物がありません（素材の範囲内ですが、この場所には建物データがありません）。'
-        : '型の内側に建物がありません。型を動かしてください。',
-    );
-  } else {
-    lines.push(`型抜き完了：${fmt(s.outputFeatures)} 件（総計 ${fmtMs(s.totalMs)}${s.cacheHit ? '、候補はキャッシュを再利用' : ''}）`);
-  }
-  if (partial) {
-    kind = 'warn';
-    lines.push('型の一部が素材の提供範囲（点線）の外にあります。範囲外の部分には建物がありません。');
-  }
-  if (s.heightMissing > 0) lines.push(`高さ不明 ${fmt(s.heightMissing)} 件は 0 m 扱い（灰色の薄板）で表示しています。`);
-  setStatus(lines.join('\n'), kind);
-  const t = s.timings.map((x) => `${STAGE_LABEL[x.stage]} ${fmtMs(x.ms)}${x.note ? `（${x.note}）` : ''}`).join(' / ');
-  $('job-stats').innerHTML =
-    `元の建物（取得矩形・キャッシュ内）：${fmt(s.candidatesInCache)} 件・${fmt(s.candidateVertices)} 頂点<br>` +
-    `型と交差：${fmt(s.candidatesTouching)} 件 → 切断なし ${fmt(s.wholeBuildings)}／境界で切断 ${fmt(s.cutBuildings)}／` +
-    `複数片 ${fmt(s.multiPartFeatures)}／接するだけで除外 ${fmt(s.droppedEmpty)}／無効形状 ${fmt(s.invalidAfterFix)}<br>` +
-    `所要時間：${t}<br>` +
-    `素材の取得（実測）：${fmtBytes(s.transfer.bytes)}／${s.transfer.requests} 要求（部分取得 ${s.transfer.rangeRequests}・全体取得 ${s.transfer.fullRequests}${s.transfer.failed ? `・失敗 ${s.transfer.failed}` : ''}）`;
+  let kind: 'ok' | 'warn' = s.outputFeatures === 0 || partial ? 'warn' : 'ok';
+  setStatus(() => {
+    const lines: string[] = [];
+    if (s.outputFeatures === 0) lines.push(t(s.candidatesInCache === 0 ? 'st.noBldArea' : 'st.noBldInside'));
+    else lines.push(t('st.done', { n: fmt(s.outputFeatures), t: fmtMs(s.totalMs), cache: s.cacheHit ? t('st.cacheReuse') : '' }));
+    if (partial) lines.push(t('st.partial'));
+    if (s.heightMissing > 0) lines.push(t('st.hmiss', { n: fmt(s.heightMissing) }));
+    return lines.join('\n');
+  }, kind);
+  lastStatsRender = () =>
+    ($('job-stats').innerHTML =
+      t('stats.cand', { n: fmt(s.candidatesInCache), v: fmt(s.candidateVertices) }) + '<br>' +
+      t('stats.touch', {
+        n: fmt(s.candidatesTouching), w: fmt(s.wholeBuildings), c: fmt(s.cutBuildings),
+        m: fmt(s.multiPartFeatures), d: fmt(s.droppedEmpty), i: fmt(s.invalidAfterFix),
+      }) + '<br>' +
+      t('stats.time', { t: timingText(s.timings) }) + '<br>' +
+      t('stats.transfer', {
+        b: fmtBytes(s.transfer.bytes), n: s.transfer.requests, r: s.transfer.rangeRequests, f: s.transfer.fullRequests,
+        fail: s.transfer.failed ? t('stats.failN', { n: s.transfer.failed }) : '',
+      }));
+  lastStatsRender();
   renderLegend();
 }
 
@@ -826,7 +885,7 @@ function viewParams() {
 }
 function updateViewPaint() {
   const { ex, lift } = viewParams();
-  $('ex-num').textContent = `${ex.toFixed(1)} 倍`;
+  $('ex-num').textContent = t('ex.val', { x: ex.toFixed(1) });
   $('lift-num').textContent = `${lift} m`;
   if (!mapLoaded) return;
   const showPlinth = ($('show-plinth') as HTMLInputElement).checked;
@@ -851,15 +910,15 @@ function renderLegend() {
   const sw = (c: string, t: string) => `<span class="item"><span class="sw" style="background:${c}"></span>${t}</span>`;
   const items =
     mode === 'height'
-      ? [sw('#efe3c8', '0'), sw('#e8bf86', '8'), sw('#df8f4a', '20'), sw('#c4521f', '45'), sw('#8a2a14', '90'), sw('#4a120a', '160 m'), sw('#9aa0a6', '高さ不明')]
+      ? [sw('#efe3c8', '0'), sw('#e8bf86', '8'), sw('#df8f4a', '20'), sw('#c4521f', '45'), sw('#8a2a14', '90'), sw('#4a120a', '160 m'), sw('#9aa0a6', t('lg.nh'))]
       : mode === 'cut'
-        ? [sw('#d9c6a3', '切断なし'), sw('#c4521f', '境界で切断'), sw('#9aa0a6', '高さ不明')]
-        : [sw('#3b6ea8', 'measured_height'), sw('#d9a03f', 'cal_height_m'), sw('#9aa0a6', 'なし（0 m 扱い）')];
+        ? [sw('#d9c6a3', t('lg.whole')), sw('#c4521f', t('lg.cut')), sw('#9aa0a6', t('lg.nh'))]
+        : [sw('#3b6ea8', 'measured_height'), sw('#d9a03f', 'cal_height_m'), sw('#9aa0a6', t('lg.none0'))];
   const { ex, lift } = viewParams();
   $('legend').innerHTML =
     items.join('') +
-    `<br>${sw('rgba(125,133,144,0.28)', '元の建物（未切断）')}${sw('rgba(217,102,31,0.25)', '型のプレビュー')}${sw('#e9e4d8', '台座')}` +
-    `<br>高さ倍率 ${ex.toFixed(1)} 倍・持ち上げ ${lift} m（表示のみ。出力の height_m は元の値）`;
+    `<br>${sw('rgba(125,133,144,0.28)', t('lg.cand'))}${sw('rgba(217,102,31,0.25)', t('lg.preview'))}${sw('#e9e4d8', t('lg.plinth'))}` +
+    `<br>${t('lg.note', { x: ex.toFixed(1), l: lift })}`;
 }
 
 // ---- 出力 ----
@@ -872,9 +931,9 @@ function exportGeoJSON() {
   const [lon, lat] = fromUtm(state.materialEpsg, r.placement.tx, r.placement.ty);
   const out = {
     type: 'FeatureCollection',
-    name: `まちの型抜き ${u?.name ?? r.templateCode} × ${materialLabel(m)}`,
+    name: `City Cutout ${u?.name ?? r.templateCode} × ${m.itemId}`,
     metadata: {
-      generator: 'まちの型抜き（30DayMapChallenge 2026 Day 3）',
+      generator: 'City Cutout / まちの型抜き (#30DayMapChallenge 2026 Day 3)',
       createdAt: r.createdAt,
       crs: 'EPSG:4326 (lon, lat)',
       material: {
@@ -883,7 +942,7 @@ function exportGeoJSON() {
       },
       template: {
         code: r.templateCode, name: u?.name ?? null, prefectureCode: state.prefCode, kind: u?.kind ?? null,
-        source: '国土数値情報 行政区域データ N03-20260101', templateCrs: `EPSG:${state.tgeom?.epsg}`,
+        source: 'MLIT National Land Numerical Information, Administrative Areas N03-20260101', templateCrs: `EPSG:${state.tgeom?.epsg}`,
       },
       placement: {
         center_lonlat: [lon, lat], width_m: r.placement.width, rotation_deg_ccw: r.placement.rotationDeg,
@@ -894,11 +953,11 @@ function exportGeoJSON() {
       heightRule: 'height_m = measured_height (>0) else cal_height_m (>0) else null',
       stats: r.stats,
       attribution: [
-        '国土交通省 Project PLATEAU 3D都市モデル（CC BY 4.0）',
-        'Pacific Spatial Solutions, Flateau V2（CC BY 4.0）',
-        '「国土数値情報（行政区域データ）」（国土交通省）を加工して作成（CC BY 4.0）',
+        'MLIT Project PLATEAU 3D city models (CC BY 4.0)',
+        'Pacific Spatial Solutions, Flateau V2 (CC BY 4.0)',
+        'National Land Numerical Information, Administrative Areas (MLIT, CC BY 4.0) — 「国土数値情報（行政区域データ）」（国土交通省）を加工して作成',
       ],
-      processing: '建物フットプリント（LOD0）を、移動・拡縮・回転した行政界で切断（ST_Intersection）。境界をまたぐ建物は切断。',
+      processing: 'LOD0 building footprints cut (ST_Intersection) by the moved, scaled and rotated boundary; buildings crossing the boundary are split.',
     },
     features: r.fc.features.map((f) => ({
       ...f,
@@ -970,22 +1029,51 @@ function wire() {
   $('btn-export').addEventListener('click', exportGeoJSON);
 }
 
+let engineInfo: (() => string) | null = null;
+
+/** 言語を切り替え、表示中の文言をすべて作り直す */
+function rerenderAll() {
+  applyStatic();
+  syncSourceOptions();
+  renderMaterialList();
+  renderMaterialInfo();
+  renderPrefectures();
+  renderUnits();
+  renderTemplateInfo();
+  updatePlaceInfo();
+  updateViewPaint();
+  lastStatsRender?.();
+  setStatus(lastStatus.text, lastStatus.kind);
+  setMapStatus(mapStatusKey);
+  if (engineInfo) $('engine-info').textContent = engineInfo();
+  updateHud();
+}
+
 async function boot() {
+  applyStatic();
+  setMapStatus('map.init');
+  updateHud();
+  updateViewPaint();
   wire();
-  startBusy(() => 'カタログと解析エンジンを準備中');
+  $('btn-lang').addEventListener('click', () => {
+    setLang(lang === 'en' ? 'ja' : 'en');
+    rerenderAll();
+  });
+  startBusy(() => t('st.boot'));
   const initP = client.request({ type: 'init' }, (pr) => {
-    if (pr.type === 'progress') $('engine-info').textContent = pr.message;
+    if (pr.type === 'progress') $('engine-info').textContent = tm(pr.msg);
   });
   try {
     const [mats, prefs, mirror] = await Promise.all([loadMaterials(), loadPrefectures(), loadMirrorCatalog()]);
     state.mirror = mirror;
     state.materials = mats.materials;
+    for (const m of mats.materials) if (m.jisCode) romajiByJis.set(m.jisCode, romajiFromItemId(m.itemId));
     state.prefs = prefs.prefectures;
     renderMaterialList();
     renderPrefectures();
   } catch (e) {
     stopBusy();
-    setStatus(`カタログの読込に失敗：${(e as Error).message}`, 'error');
+    setStatus(() => t('st.catalogFail', { msg: errText(e) }), 'error');
     return;
   }
   try {
@@ -993,12 +1081,13 @@ async function boot() {
     stopBusy();
     if (r.type === 'ready') {
       state.engineReady = true;
-      $('engine-info').textContent = `解析エンジン：DuckDB-Wasm ${r.engineVersion} + spatial ${r.spatialVersion}（起動 ${fmtMs(r.ms)}）`;
-      setStatus('解析エンジンの準備完了', 'ok');
+      engineInfo = () => t('engine.info', { v: r.engineVersion, s: r.spatialVersion, t: fmtMs(r.ms) });
+      $('engine-info').textContent = engineInfo();
+      setStatus(() => t('st.engineReady'), 'ok');
     }
   } catch (e) {
     stopBusy();
-    setStatus(`解析エンジンの起動に失敗：${(e as Error).message}`, 'error');
+    setStatus(() => t('st.engineFail', { msg: errText(e) }), 'error');
     return;
   }
   const params = new URLSearchParams(location.search);
