@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "data:materials": "node scripts/build-material-catalog.mjs",
-    "data:templates": "node scripts/build-templates.mjs"
+    "data:templates": "node scripts/build-templates.mjs",
+    "data:mirror": "node scripts/mirror-materials-to-r2.mjs"
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev57.0",

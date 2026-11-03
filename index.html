@@ -19,6 +19,13 @@
           <h2><span class="step">1</span>素材を選ぶ（建物ファイル）</h2>
           <input id="material-filter" type="search" placeholder="都市名・都道府県・年度で絞り込み" />
           <select id="material-select" size="6" aria-label="素材ファイル"></select>
+          <div class="row">
+            <label for="source-select">取得元</label>
+            <select id="source-select">
+              <option value="r2" disabled>R2 の複製</option>
+              <option value="origin" selected>公開元（source.coop）</option>
+            </select>
+          </div>
           <dl id="material-info" class="info"></dl>
         </section>
 

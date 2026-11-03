@@ -4,6 +4,8 @@ import maplibregl from 'maplibre-gl';
 import { AnalysisClient } from './lib/analysis';
 import {
   loadMaterials,
+  loadMirrorCatalog,
+  type MirrorCatalog,
   loadPrefectures,
   loadTemplateFeature,
   loadTemplateIndex,
@@ -56,6 +58,7 @@ interface ResultState {
 const state = {
   engineReady: false,
   materials: [] as Material[],
+  mirror: null as MirrorCatalog | null,
   material: null as Material | null,
   materialReady: false,
   materialEpsg: 0,
@@ -280,6 +283,7 @@ function renderMaterialInfo() {
     ['範囲', m.bbox.map((v) => v.toFixed(4)).join(', ')],
     ['STAC Item', m.itemId],
     ['asset', `${m.asset}（${m.crs ?? 'CRS不明'}）`],
+    ['取得元', useMirror(m) ? `R2 の複製（${fmtBytes(mirrorFor(m)!.bytes)}、公開元と同一ファイル）` : '公開元 source.coop'],
     ['解析CRS', state.materialEpsg ? `EPSG:${state.materialEpsg}（UTM ${state.materialEpsg - 32600}N）` : '-'],
   ];
   el.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join('') +
@@ -317,9 +321,30 @@ function clearResult(reason: string) {
   updateHud();
 }
 
-async function selectMaterial(id: string) {
+/** 取得元：R2 の複製（あれば既定）か公開元（source.coop） */
+function mirrorFor(m: Material | null) {
+  return m ? (state.mirror?.items[m.itemId] ?? null) : null;
+}
+function useMirror(m: Material | null) {
+  return !!mirrorFor(m) && ($('source-select') as HTMLSelectElement).value === 'r2';
+}
+function syncSourceOptions() {
+  const sel = $('source-select') as HTMLSelectElement;
+  const opt = sel.querySelector('option[value="r2"]') as HTMLOptionElement;
+  const mi = mirrorFor(state.material);
+  opt.disabled = !mi;
+  opt.textContent = mi ? 'R2 の複製（geo-opendata）' : 'R2 の複製（この素材は未登録）';
+  if (!mi) sel.value = 'origin';
+}
+
+/** keepPlacement: 取得元の切替など、同じ素材を読み直すときは配置を保つ */
+async function selectMaterial(id: string, reload = false, keepPlacement = false) {
   const m = state.materials.find((x) => x.id === id);
-  if (!m || state.material?.id === m.id) return;
+  if (!m || (!reload && state.material?.id === m.id)) return;
+  if (!reload) {
+    const sel = $('source-select') as HTMLSelectElement;
+    if (mirrorFor(m)) sel.value = 'r2';
+  }
   const seq = ++state.materialSeq;
   state.material = m;
   state.materialReady = false;
@@ -329,14 +354,24 @@ async function selectMaterial(id: string) {
   clearResult('素材を切り替えたため、前の結果を消去しました');
   state.candidatesFor = null;
   if (mapLoaded) src('cand')?.setData(empty);
+  syncSourceOptions();
   renderMaterialInfo();
   showCoverage();
   updateHud();
-  setStatus(`素材を準備中：${materialLabel(m)}`, 'busy');
+  setStatus(`素材を準備中：${materialLabel(m)}（取得元：${useMirror(m) ? 'R2 の複製' : '公開元 source.coop'}）`, 'busy');
   try {
     const r = await client.request({
       type: 'setMaterial',
-      material: { id: m.id, itemId: m.itemId, href: m.href, crs: m.crs ?? '', fiscalYear: m.fiscalYear, fileSize: m.fileSize },
+      material: {
+        id: m.id,
+        itemId: m.itemId,
+        href: useMirror(m) ? mirrorFor(m)!.href : m.href,
+        sourceHref: m.href,
+        mirrorBaseUrl: useMirror(m) ? state.mirror!.baseUrl : null,
+        crs: m.crs ?? '',
+        fiscalYear: m.fiscalYear,
+        fileSize: m.fileSize,
+      },
       analysisEpsg: state.materialEpsg,
     });
     if (seq !== state.materialSeq) return; // より新しい選択がある
@@ -348,7 +383,8 @@ async function selectMaterial(id: string) {
       `素材の準備完了（${fmtMs(r.ms)}、取得 ${fmtBytes(r.transfer.bytes)}・${r.transfer.requests} 要求）。GEOM型：${r.geometryType}${r.hasBBoxColumns ? '' : '／bbox列なし'}`,
       'ok',
     );
-    moveToMaterialCenter(true);
+    if (keepPlacement) scheduleAutoCut();
+    else moveToMaterialCenter(true);
     renderMaterialInfo();
     updateHud();
   } catch (e) {
@@ -923,6 +959,9 @@ function wire() {
     scheduleAutoCut();
   });
   $('btn-cut').addEventListener('click', () => void runCutout(false));
+  $('source-select').addEventListener('change', () => {
+    if (state.material) void selectMaterial(state.material.id, true, true);
+  });
   $('btn-force').addEventListener('click', () => void runCutout(true));
   for (const id of ['ex-range', 'lift-range', 'color-mode', 'show-cand', 'show-plinth', 'show-preview']) {
     $(id).addEventListener('input', updateViewPaint);
@@ -938,7 +977,8 @@ async function boot() {
     if (pr.type === 'progress') $('engine-info').textContent = pr.message;
   });
   try {
-    const [mats, prefs] = await Promise.all([loadMaterials(), loadPrefectures()]);
+    const [mats, prefs, mirror] = await Promise.all([loadMaterials(), loadPrefectures(), loadMirrorCatalog()]);
+    state.mirror = mirror;
     state.materials = mats.materials;
     state.prefs = prefs.prefectures;
     renderMaterialList();

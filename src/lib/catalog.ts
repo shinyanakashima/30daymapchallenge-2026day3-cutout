@@ -82,3 +82,30 @@ export function materialLabel(m: Material) {
 export function materialPrefecture(m: Material) {
   return m.areaJa?.split('_')[0] ?? 'その他';
 }
+
+/** R2 に変換せずに複製した素材の一覧（scripts/mirror-materials-to-r2.mjs が作成） */
+export interface MirrorEntry {
+  href: string;
+  key: string;
+  bytes: number | null;
+  sha256: string | null;
+  sourceHref: string;
+  sourceEtag: string | null;
+  uploadedAt: string;
+}
+export interface MirrorCatalog {
+  baseUrl: string;
+  generatedAt: string;
+  items: Record<string, MirrorEntry>;
+}
+/** mirror.json が無い・読めない場合は null（公開元から読む） */
+export async function loadMirrorCatalog(): Promise<MirrorCatalog | null> {
+  try {
+    const r = await fetch(`${base}catalog/mirror.json`);
+    if (!r.ok) return null;
+    const j = (await r.json()) as MirrorCatalog;
+    return j && typeof j.baseUrl === 'string' && j.items ? j : null;
+  } catch {
+    return null;
+  }
+}

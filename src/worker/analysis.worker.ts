@@ -14,11 +14,13 @@ const ctx = self as unknown as DedicatedWorkerGlobalScope;
 let db: duckdb.AsyncDuckDB | null = null;
 let conn: duckdb.AsyncDuckDBConnection | null = null;
 const NET_CHANNEL = 'cutout-duckdb-net';
+/** 素材の取得とみなすURLの接頭辞（公開元＋R2 複製の置き場所） */
+const materialHosts: string[] = ['https://data.source.coop/'];
 const net = { requests: 0, bytes: 0, rangeRequests: 0, fullRequests: 0, failed: 0 };
 const netChannel = new BroadcastChannel(NET_CHANNEL);
 netChannel.onmessage = (ev: MessageEvent<{ method: string; url: string; range: string | null; status: number; bytes: number }>) => {
   const r = ev.data;
-  if (!/^https:\/\/data\.source\.coop\//.test(r.url)) return; // 素材の取得だけを数える（拡張の取得は除く）
+  if (!materialHosts.some((h) => r.url.startsWith(h))) return; // 素材の取得だけを数える（拡張の取得は除く）
   net.requests++;
   net.bytes += r.bytes;
   if (r.status === 206) net.rangeRequests++;
@@ -170,13 +172,24 @@ async function setMaterial(reqId: number, ref: MaterialRef, analysisEpsg: number
   const t0 = performance.now();
   const net0 = netSnapshot();
   const epsg = epsgOk(analysisEpsg);
-  if (!/^https:\/\/data\.source\.coop\/pacificspatial\/flateau-2-0\/[\w\-./]+_building_lod0\.parquet$/.test(ref.href)) {
-    throw new Error('素材URLがカタログの形式と一致しません');
+  const SOURCE = /^https:\/\/data\.source\.coop\/pacificspatial\/flateau-2-0\/[\w\-./]+_building_lod0\.parquet$/;
+  if (!SOURCE.test(ref.sourceHref)) throw new Error('素材URLがカタログの形式と一致しません');
+  if (ref.mirrorBaseUrl) {
+    // R2 複製：カタログに記載された置き場所（https）の配下で、公開元と同じファイル名に限る
+    const base = ref.mirrorBaseUrl;
+    if (!/^https:\/\/[\w.-]+\/[\w\-./%]*$/.test(base) || !ref.href.startsWith(base)) {
+      throw new Error('R2 複製のURLがカタログの置き場所と一致しません');
+    }
+    if (ref.href.split('/').pop() !== ref.sourceHref.split('/').pop()) throw new Error('R2 複製のファイル名が公開元と一致しません');
+    const origin = new URL(base).origin + '/';
+    if (!materialHosts.includes(origin)) materialHosts.push(origin);
+  } else if (ref.href !== ref.sourceHref) {
+    throw new Error('素材URLが公開元と一致しません');
   }
   if (ref.crs !== 'EPSG:6668') throw new Error(`未対応の素材CRSです: ${ref.crs}`);
   post({ type: 'progress', reqId, stage: 'material', message: 'スキーマを確認中（ヘッダのみ取得）' });
   // 素材ごとに別名で登録。別素材のデータを混ぜない
-  const fileName = `material_${ref.itemId.replace(/[^\w-]/g, '_')}.parquet`;
+  const fileName = `material_${ref.itemId.replace(/[^\w-]/g, '_')}_${ref.mirrorBaseUrl ? 'r2' : 'origin'}.parquet`;
   await db!.registerFileURL(fileName, ref.href, duckdb.DuckDBDataProtocol.HTTP, false);
   const desc = await q(`DESCRIBE SELECT * FROM read_parquet('${fileName}')`);
   const columns: string[] = [];

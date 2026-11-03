@@ -4,7 +4,10 @@
 export interface MaterialRef {
   id: string; // STAC Item ID + asset 名
   itemId: string;
-  href: string; // building_lod0 asset の URL（カタログ由来）
+  href: string; // 読込に使う URL（公開元の building_lod0 asset か、その R2 複製）
+  sourceHref: string; // 公開元（source.coop）の URL。出典・照合用
+  /** href が R2 複製の場合、その置き場所の基準URL（mirror.json の baseUrl）。公開元から読む場合は null */
+  mirrorBaseUrl: string | null;
   crs: string; // 例: EPSG:6668
   fiscalYear: number | null;
   fileSize: number | null;
